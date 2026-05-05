@@ -1140,22 +1140,22 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   const smartNameSelection = useMemo<SmartWorkspaceNameSelection | null>(() => {
     if (linkedWorkItem) {
       const isLinear = linkedWorkItem.number === 0 && !linkedWorkItem.url.includes('github.com')
+      const kind: SmartWorkspaceNameSelection['kind'] = isLinear
+        ? 'linear'
+        : linkedWorkItem.type === 'pr'
+          ? 'github-pr'
+          : 'github-issue'
       return {
-        kind: isLinear ? 'linear' : 'github',
+        kind,
         label:
           isLinear || linkedWorkItem.number === 0
             ? linkedWorkItem.title
             : `#${linkedWorkItem.number} ${linkedWorkItem.title}`,
-        description: isLinear
-          ? 'Linear'
-          : linkedWorkItem.type === 'pr'
-            ? 'GitHub PR'
-            : 'GitHub issue',
         url: linkedWorkItem.url
       }
     }
     if (baseBranch) {
-      return { kind: 'branch', label: baseBranch, description: 'Branch' }
+      return { kind: 'branch', label: baseBranch }
     }
     return null
   }, [baseBranch, linkedWorkItem])
