@@ -358,6 +358,40 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   agentPromptRef.current = agentPrompt
 
   const selectedRepo = eligibleRepos.find((repo) => repo.id === repoId)
+
+  // Why: resolves the selected repo's owner/repo slug so a PR URL pasted
+  // into the workspace name field can be matched against the current repo.
+  // Pasting a PR URL from a different repo would otherwise recover only the
+  // PR number, mislinking the worktree to an unrelated PR with the same
+  // number in the selected repo.
+  const [selectedRepoSlug, setSelectedRepoSlug] = useState<{ owner: string; repo: string } | null>(
+    null
+  )
+  useEffect(() => {
+    if (!selectedRepo) {
+      setSelectedRepoSlug(null)
+      return
+    }
+    let cancelled = false
+    void (window.api.gh.repoSlug({ repoPath: selectedRepo.path }) as Promise<{
+      owner: string
+      repo: string
+    } | null>)
+      .then((result) => {
+        if (cancelled) {
+          return
+        }
+        setSelectedRepoSlug(result)
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSelectedRepoSlug(null)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedRepo?.id, selectedRepo?.path])
   const sparsePresetsForRepo = sparsePresetsByRepo[repoId]
   const sparsePresets = sparsePresetsForRepo ?? EMPTY_SPARSE_PRESETS
   const normalizedSparseDirectories = useMemo(
@@ -412,10 +446,21 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
     }
     const fromName = parseGitHubIssueOrPRLink(name)
     if (fromName && fromName.type === 'pr') {
-      return fromName.number
+      // Why: only adopt a number when the URL's owner/repo matches the
+      // selected repo. Pasting `github.com/other/repo/pull/1234` must not
+      // mislink the worktree to an unrelated PR #1234 in the current repo.
+      // If the slug hasn't resolved yet, suppress recovery rather than
+      // risking a cross-repo mislink.
+      if (
+        selectedRepoSlug &&
+        fromName.slug.owner.toLowerCase() === selectedRepoSlug.owner.toLowerCase() &&
+        fromName.slug.repo.toLowerCase() === selectedRepoSlug.repo.toLowerCase()
+      ) {
+        return fromName.number
+      }
     }
     return null
-  }, [linkedPR, name])
+  }, [linkedPR, name, selectedRepoSlug])
   const setupConfig = useMemo(
     () => getSetupConfig(selectedRepo, yamlHooks),
     [selectedRepo, yamlHooks]

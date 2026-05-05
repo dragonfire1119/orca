@@ -105,8 +105,8 @@ export default function ChecksPanel(): React.JSX.Element {
     // them so we don't keep rendering cached branch summaries or empty file
     // lists from an older payload.
     conflictSummaryRefreshKeyRef.current = refreshKey
-    void fetchPRForBranch(repo.path, branch, { force: true })
-  }, [repo, isFolder, branch, pr, fetchPRForBranch])
+    void fetchPRForBranch(repo.path, branch, { force: true, linkedPRNumber: linkedPR })
+  }, [repo, isFolder, branch, pr, linkedPR, fetchPRForBranch])
 
   // Fetch checks via cached store method
   const fetchChecks = useCallback(
@@ -235,7 +235,10 @@ export default function ChecksPanel(): React.JSX.Element {
     }
     setIsRefreshing(true)
     try {
-      const refreshedPR = await fetchPRForBranch(repo.path, branch, { force: true })
+      const refreshedPR = await fetchPRForBranch(repo.path, branch, {
+        force: true,
+        linkedPRNumber: linkedPR
+      })
       if (refreshedPR) {
         await Promise.all([
           fetchChecks({ force: true, prNumberOverride: refreshedPR.number }),
@@ -248,7 +251,7 @@ export default function ChecksPanel(): React.JSX.Element {
     } finally {
       setIsRefreshing(false)
     }
-  }, [repo, branch, fetchPRForBranch, fetchChecks, fetchComments])
+  }, [repo, branch, linkedPR, fetchPRForBranch, fetchChecks, fetchComments])
 
   const handleStartEdit = useCallback(() => {
     if (!pr) {
@@ -278,13 +281,13 @@ export default function ChecksPanel(): React.JSX.Element {
       })
       if (ok) {
         // Re-fetch PR to get updated title
-        await fetchPRForBranch(repo.path, branch, { force: true })
+        await fetchPRForBranch(repo.path, branch, { force: true, linkedPRNumber: linkedPR })
       }
     } finally {
       setTitleSaving(false)
       setEditingTitle(false)
     }
-  }, [repo, pr, titleDraft, branch, fetchPRForBranch])
+  }, [repo, pr, titleDraft, branch, linkedPR, fetchPRForBranch])
 
   const handleTitleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -318,9 +321,9 @@ export default function ChecksPanel(): React.JSX.Element {
   // Refresh PR (passed to PRActions)
   const handleRefreshPR = useCallback(async () => {
     if (repo && branch) {
-      await fetchPRForBranch(repo.path, branch, { force: true })
+      await fetchPRForBranch(repo.path, branch, { force: true, linkedPRNumber: linkedPR })
     }
-  }, [repo, branch, fetchPRForBranch])
+  }, [repo, branch, linkedPR, fetchPRForBranch])
 
   // Open PR in browser
   const handleOpenPR = useCallback(() => {

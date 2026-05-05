@@ -941,8 +941,16 @@ export async function getPRForBranch(
             '--json',
             'number,title,state,url,statusCheckRollup,updatedAt,isDraft,mergeable,baseRefName,headRefName,baseRefOid,headRefOid'
           ]
-      const { stdout } = await ghExecFileAsync(args, { cwd: repoPath })
-      data = JSON.parse(stdout)
+      try {
+        const { stdout } = await ghExecFileAsync(args, { cwd: repoPath })
+        data = JSON.parse(stdout)
+      } catch {
+        // Why: a stale linkedPRNumber (PR deleted, wrong repo, …) makes
+        // `gh pr view <number>` reject. Treat that as the no-PR case so
+        // callers see the historical `null` semantics instead of a thrown
+        // error every poll cycle.
+        data = null
+      }
     }
 
     if (!data) {
