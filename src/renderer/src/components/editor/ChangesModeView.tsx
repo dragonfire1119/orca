@@ -62,24 +62,21 @@ export function ChangesModeView({
   // grow the model registry unboundedly.
   const previousOriginalModelUriRef = useRef<string | null>(null)
   useEffect(() => {
+    const previous = previousOriginalModelUriRef.current
     if (originalModelUri === null) {
+      // Why: dc flipped from text to binary/undefined while the tab stays open;
+      // dispose the retained original so it doesn't linger until tab close.
+      if (previous) {
+        monaco.editor.getModel(monaco.Uri.parse(previous))?.dispose()
+        previousOriginalModelUriRef.current = null
+      }
       return
     }
-    const previous = previousOriginalModelUriRef.current
     if (previous && previous !== originalModelUri) {
       monaco.editor.getModel(monaco.Uri.parse(previous))?.dispose()
     }
     previousOriginalModelUriRef.current = originalModelUri
   }, [originalModelUri])
-  useEffect(() => {
-    return () => {
-      const previous = previousOriginalModelUriRef.current
-      if (previous) {
-        monaco.editor.getModel(monaco.Uri.parse(previous))?.dispose()
-        previousOriginalModelUriRef.current = null
-      }
-    }
-  }, [])
   if (!dc) {
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
