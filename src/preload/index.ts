@@ -63,6 +63,7 @@ import type {
 } from '../shared/ssh-types'
 import type { AgentStatusState } from '../shared/agent-status-types'
 import type { TelemetryConsentState } from '../shared/telemetry-consent-types'
+import type { AgentKind, LaunchSource, RequestKind } from '../shared/telemetry-events'
 import {
   ORCA_EDITOR_SAVE_DIRTY_FILES_EVENT,
   type EditorSaveDirtyFilesDetail
@@ -383,6 +384,12 @@ const api = {
       worktreeId?: string
       sessionId?: string
       shellOverride?: string
+      // Why: telemetry-plan.md§Agent launch semantics — main fires
+      // `agent_started` only after the spawn succeeds. The renderer is the
+      // source of truth for the launch metadata; main is the source of
+      // truth for whether the launch happened. Loose typing here on
+      // purpose: validation lives at the main-side schema validator.
+      telemetry?: { agent_kind: AgentKind; launch_source: LaunchSource; request_kind: RequestKind }
     }): Promise<{
       id: string
       snapshot?: string
@@ -522,8 +529,11 @@ const api = {
     repoSlug: (args: { repoPath: string }): Promise<unknown> =>
       ipcRenderer.invoke('gh:repoSlug', args),
 
-    prForBranch: (args: { repoPath: string; branch: string }): Promise<unknown> =>
-      ipcRenderer.invoke('gh:prForBranch', args),
+    prForBranch: (args: {
+      repoPath: string
+      branch: string
+      linkedPRNumber?: number | null
+    }): Promise<unknown> => ipcRenderer.invoke('gh:prForBranch', args),
 
     issue: (args: { repoPath: string; number: number }): Promise<unknown> =>
       ipcRenderer.invoke('gh:issue', args),
@@ -678,8 +688,7 @@ const api = {
       ipcRenderer.invoke('gh:updateProjectItemField', args),
     clearProjectItemField: (
       args: ClearProjectItemFieldArgs
-    ): Promise<GitHubProjectMutationResult> =>
-      ipcRenderer.invoke('gh:clearProjectItemField', args),
+    ): Promise<GitHubProjectMutationResult> => ipcRenderer.invoke('gh:clearProjectItemField', args),
     updateIssueBySlug: (args: UpdateIssueBySlugArgs): Promise<GitHubProjectMutationResult> =>
       ipcRenderer.invoke('gh:updateIssueBySlug', args),
     updatePullRequestBySlug: (
@@ -708,8 +717,7 @@ const api = {
       ipcRenderer.invoke('gh:listIssueTypesBySlug', args),
     updateIssueTypeBySlug: (
       args: UpdateIssueTypeBySlugArgs
-    ): Promise<GitHubProjectMutationResult> =>
-      ipcRenderer.invoke('gh:updateIssueTypeBySlug', args)
+    ): Promise<GitHubProjectMutationResult> => ipcRenderer.invoke('gh:updateIssueTypeBySlug', args)
   },
 
   linear: {
@@ -978,10 +986,12 @@ const api = {
 
   sidekick: {
     import: (): Promise<CustomSidekick | null> => ipcRenderer.invoke('sidekick:import'),
-    read: (id: string, fileName: string): Promise<ArrayBuffer | null> =>
-      ipcRenderer.invoke('sidekick:read', id, fileName),
-    delete: (id: string, fileName: string): Promise<void> =>
-      ipcRenderer.invoke('sidekick:delete', id, fileName)
+    importPetBundle: (): Promise<CustomSidekick | null> =>
+      ipcRenderer.invoke('sidekick:importPetBundle'),
+    read: (id: string, fileName: string, kind?: 'image' | 'bundle'): Promise<ArrayBuffer | null> =>
+      ipcRenderer.invoke('sidekick:read', id, fileName, kind),
+    delete: (id: string, fileName: string, kind?: 'image' | 'bundle'): Promise<void> =>
+      ipcRenderer.invoke('sidekick:delete', id, fileName, kind)
   },
 
   browser: {
@@ -2125,7 +2135,13 @@ const api = {
       address?: string
     }): Promise<
       | { available: false }
-      | { available: true; qrDataUrl: string; endpoint: string; deviceId: string }
+      | {
+          available: true
+          qrDataUrl: string
+          pairingUrl: string
+          endpoint: string
+          deviceId: string
+        }
     > => ipcRenderer.invoke('mobile:getPairingQR', args),
 
     listDevices: (): Promise<{

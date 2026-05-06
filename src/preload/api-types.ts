@@ -149,6 +149,7 @@ import type {
   CodexUsageSummary
 } from '../shared/codex-usage-types'
 import type { TelemetryConsentState } from '../shared/telemetry-consent-types'
+import type { AgentKind, LaunchSource, RequestKind } from '../shared/telemetry-events'
 
 export type BrowserApi = {
   registerGuest: (args: {
@@ -449,6 +450,11 @@ export type PreloadApi = {
       // Preserved from the deleted index.d.ts PtyApi duplicate during the
       // single-source-of-truth collapse (see docs/preload-typecheck-hole.md §1).
       shellOverride?: string
+      // Why: telemetry-plan.md§Agent launch semantics — main emits
+      // `agent_started` only after the PTY/session is created successfully,
+      // so the renderer threads the launch metadata through this field and
+      // the IPC handler fires the event from the spawn-success branch.
+      telemetry?: { agent_kind: AgentKind; launch_source: LaunchSource; request_kind: RequestKind }
     }) => Promise<{
       id: string
       snapshot?: string
@@ -499,7 +505,11 @@ export type PreloadApi = {
   gh: {
     viewer: () => Promise<GitHubViewer | null>
     repoSlug: (args: { repoPath: string }) => Promise<{ owner: string; repo: string } | null>
-    prForBranch: (args: { repoPath: string; branch: string }) => Promise<PRInfo | null>
+    prForBranch: (args: {
+      repoPath: string
+      branch: string
+      linkedPRNumber?: number | null
+    }) => Promise<PRInfo | null>
     issue: (args: { repoPath: string; number: number }) => Promise<IssueInfo | null>
     workItem: (args: {
       repoPath: string
@@ -603,9 +613,7 @@ export type PreloadApi = {
     updateProjectItemField: (
       args: UpdateProjectItemFieldArgs
     ) => Promise<GitHubProjectMutationResult>
-    clearProjectItemField: (
-      args: ClearProjectItemFieldArgs
-    ) => Promise<GitHubProjectMutationResult>
+    clearProjectItemField: (args: ClearProjectItemFieldArgs) => Promise<GitHubProjectMutationResult>
     updateIssueBySlug: (args: UpdateIssueBySlugArgs) => Promise<GitHubProjectMutationResult>
     updatePullRequestBySlug: (
       args: UpdatePullRequestBySlugArgs
@@ -624,9 +632,7 @@ export type PreloadApi = {
       args: ListAssignableUsersBySlugArgs
     ) => Promise<ListAssignableUsersBySlugResult>
     listIssueTypesBySlug: (args: ListIssueTypesBySlugArgs) => Promise<ListIssueTypesBySlugResult>
-    updateIssueTypeBySlug: (
-      args: UpdateIssueTypeBySlugArgs
-    ) => Promise<GitHubProjectMutationResult>
+    updateIssueTypeBySlug: (args: UpdateIssueTypeBySlugArgs) => Promise<GitHubProjectMutationResult>
   }
   linear: {
     connect: (args: {
@@ -752,8 +758,9 @@ export type PreloadApi = {
   }
   sidekick: {
     import: () => Promise<CustomSidekick | null>
-    read: (id: string, fileName: string) => Promise<ArrayBuffer | null>
-    delete: (id: string, fileName: string) => Promise<void>
+    importPetBundle: () => Promise<CustomSidekick | null>
+    read: (id: string, fileName: string, kind?: 'image' | 'bundle') => Promise<ArrayBuffer | null>
+    delete: (id: string, fileName: string, kind?: 'image' | 'bundle') => Promise<void>
   }
   browser: BrowserApi
   hooks: {
@@ -1161,11 +1168,15 @@ export type PreloadApi = {
     listNetworkInterfaces: () => Promise<{
       interfaces: { name: string; address: string }[]
     }>
-    getPairingQR: (args?: {
-      address?: string
-    }) => Promise<
+    getPairingQR: (args?: { address?: string }) => Promise<
       | { available: false }
-      | { available: true; qrDataUrl: string; endpoint: string; deviceId: string }
+      | {
+          available: true
+          qrDataUrl: string
+          pairingUrl: string
+          endpoint: string
+          deviceId: string
+        }
     >
     listDevices: () => Promise<{
       devices: { deviceId: string; name: string; pairedAt: number; lastSeenAt: number }[]

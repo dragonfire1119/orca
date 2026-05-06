@@ -134,6 +134,23 @@ import { HeadlessEmulator } from '../daemon/headless-emulator'
 import { killAllProcessesForWorktree } from './worktree-teardown'
 import { MOBILE_SUBSCRIBE_SCROLLBACK_ROWS } from './scrollback-limits'
 import type { IPtyProvider } from '../providers/types'
+import type { ClaudeAccountService } from '../claude-accounts/service'
+import type { CodexAccountService } from '../codex-accounts/service'
+import type { RateLimitService } from '../rate-limits/service'
+import type { ClaudeRateLimitAccountsState, CodexRateLimitAccountsState } from '../../shared/types'
+import type { RateLimitState } from '../../shared/rate-limit-types'
+
+type RuntimeAccountServices = {
+  claudeAccounts: ClaudeAccountService
+  codexAccounts: CodexAccountService
+  rateLimits: RateLimitService
+}
+
+export type AccountsSnapshot = {
+  claude: ClaudeRateLimitAccountsState
+  codex: CodexRateLimitAccountsState
+  rateLimits: RateLimitState
+}
 
 type RuntimeStore = {
   getRepos: Store['getRepos']
@@ -167,6 +184,12 @@ type RuntimeLeafRecord = RuntimeSyncedLeaf & {
   tailLinesTotal: number
   preview: string
   lastAgentStatus: AgentStatus | null
+  // Why: the most recent OSC title observed on this leaf's PTY data. Used by
+  // worktree.ps so daemon-hosted terminals (no renderer pushing pane titles)
+  // still recompute working/idle from the live title each call instead of
+  // serving a stale `lastAgentStatus` after the agent process exits and the
+  // shell takes over the title — the bug behind issue #1437.
+  lastOscTitle: string | null
 }
 
 type RuntimePtyWorktreeRecord = {
@@ -351,6 +374,12 @@ export class OrcaRuntimeService {
     Set<(event: { mode: 'mobile-fit' | 'desktop-fit'; cols: number; rows: number }) => void>
   >()
   private subscriptionCleanups = new Map<string, () => void>()
+  // Why: index of subscriptionIds by per-WebSocket connectionId so the
+  // server can sweep all subscriptions for a closing socket without
+  // touching subscriptions on other live sockets that share the same
+  // deviceToken (multi-screen mobile).
+  private subscriptionsByConnection = new Map<string, Set<string>>()
+  private subscriptionConnectionByEntry = new Map<string, string>()
   // Why: mobile clients subscribe to desktop notifications via
   // notifications.subscribe. This set enables fan-out — each connected
   // mobile client gets its own listener, and dispatchMobileNotification
@@ -505,6 +534,7 @@ export class OrcaRuntimeService {
   private fetchInflight = new Map<string, Promise<void>>()
   private fetchLastCompletedAt = new Map<string, number>()
   private readonly getLocalProviderFn: (() => IPtyProvider) | null
+  private accountServices: RuntimeAccountServices | null = null
 
   constructor(
     store: RuntimeStore | null = null,
@@ -632,7 +662,8 @@ export class OrcaRuntimeService {
         tailTruncated: existing?.ptyId === ptyId ? existing.tailTruncated : false,
         tailLinesTotal: existing?.ptyId === ptyId ? existing.tailLinesTotal : 0,
         preview: existing?.ptyId === ptyId ? existing.preview : '',
-        lastAgentStatus: existing?.ptyId === ptyId ? existing.lastAgentStatus : null
+        lastAgentStatus: existing?.ptyId === ptyId ? existing.lastAgentStatus : null,
+        lastOscTitle: existing?.ptyId === ptyId ? existing.lastOscTitle : null
       })
 
       if (leaf.ptyId) {
@@ -790,8 +821,21 @@ export class OrcaRuntimeService {
       leaf.tailLinesTotal += nextTail.newCompleteLines
       leaf.preview = buildPreview(leaf.tailBuffer, leaf.tailPartialLine)
 
-      if (agentStatus !== null) {
+      if (oscTitle !== null) {
+        // Why: keep the latest OSC title on the leaf so worktree.ps can
+        // recompute status from the live title each call. Without this,
+        // daemon-hosted terminals (no renderer pushing pane titles) had no
+        // way to clear a stale 'working' status after the agent exited and
+        // the shell took over the title — the stuck-spinner bug in #1437.
+        leaf.lastOscTitle = oscTitle
         const prevStatus = leaf.lastAgentStatus
+        // Why: when a new OSC title doesn't classify as an agent state (e.g.
+        // bare shell title after the agent exits), clear lastAgentStatus so
+        // it is no longer sticky. Tui-idle waiters that needed the previous
+        // 'idle' transition were already resolved at the moment of the
+        // transition below; only fresh waiters registered after the agent
+        // exits would observe the cleared value, and they correctly fall
+        // back to title-based detection / polling.
         leaf.lastAgentStatus = agentStatus
         // Why: resolve tui-idle on any transition TO idle (not just working→idle).
         // Claude Code may skip "working" entirely on fast tasks, going null→idle,
@@ -986,12 +1030,15 @@ export class OrcaRuntimeService {
       return
     }
     const status = detectAgentStatusFromTitle(title)
-    if (status === null) {
-      return
-    }
     for (const leaf of this.leaves.values()) {
       if (leaf.ptyId === ptyId) {
-        leaf.lastAgentStatus = status
+        // Why: seed lastOscTitle even when the seeded title doesn't classify
+        // as an agent state, so worktree.ps recomputes status from the live
+        // title rather than treating the leaf as agentless.
+        leaf.lastOscTitle = title
+        if (status !== null) {
+          leaf.lastAgentStatus = status
+        }
       }
     }
   }
@@ -1107,7 +1154,11 @@ export class OrcaRuntimeService {
     return { ptyId: leaf.ptyId }
   }
 
-  registerSubscriptionCleanup(subscriptionId: string, cleanup: () => void): void {
+  registerSubscriptionCleanup(
+    subscriptionId: string,
+    cleanup: () => void,
+    connectionId?: string
+  ): void {
     // Why: mobile clients reconnect frequently (phone lock, network switch).
     // The RPC client re-sends terminal.subscribe on reconnect, creating a new
     // handler before the old one is cleaned up. Without this, the old data
@@ -1115,15 +1166,54 @@ export class OrcaRuntimeService {
     const existing = this.subscriptionCleanups.get(subscriptionId)
     if (existing) {
       existing()
+      // Why: existing() already evicts itself from the per-connection index
+      // via cleanupSubscription, so no extra bookkeeping is needed here.
     }
     this.subscriptionCleanups.set(subscriptionId, cleanup)
+    if (connectionId) {
+      let set = this.subscriptionsByConnection.get(connectionId)
+      if (!set) {
+        set = new Set()
+        this.subscriptionsByConnection.set(connectionId, set)
+      }
+      set.add(subscriptionId)
+      this.subscriptionConnectionByEntry.set(subscriptionId, connectionId)
+    }
   }
 
   cleanupSubscription(subscriptionId: string): void {
     const cleanup = this.subscriptionCleanups.get(subscriptionId)
     if (cleanup) {
       this.subscriptionCleanups.delete(subscriptionId)
+      const connectionId = this.subscriptionConnectionByEntry.get(subscriptionId)
+      if (connectionId) {
+        this.subscriptionConnectionByEntry.delete(subscriptionId)
+        const set = this.subscriptionsByConnection.get(connectionId)
+        if (set) {
+          set.delete(subscriptionId)
+          if (set.size === 0) {
+            this.subscriptionsByConnection.delete(connectionId)
+          }
+        }
+      }
       cleanup()
+    }
+  }
+
+  // Why: invoked from the WebSocket transport's on-close hook so streaming
+  // listeners registered for this exact socket get torn down even when other
+  // sockets sharing the same deviceToken are still alive (multi-screen
+  // mobile). Without this sweep, listeners leak across every reconnect.
+  cleanupSubscriptionsForConnection(connectionId: string): void {
+    const set = this.subscriptionsByConnection.get(connectionId)
+    if (!set) {
+      return
+    }
+    // Why: snapshot the ids before iterating because cleanupSubscription
+    // mutates both the set and the index map.
+    const ids = Array.from(set)
+    for (const id of ids) {
+      this.cleanupSubscription(id)
     }
   }
 
@@ -1145,6 +1235,73 @@ export class OrcaRuntimeService {
     for (const listener of this.notificationListeners) {
       listener(event)
     }
+  }
+
+  // ─── Account Services (mobile RPC bridge) ─────────────────────
+
+  setAccountServices(services: RuntimeAccountServices): void {
+    this.accountServices = services
+  }
+
+  private requireAccountServices(): RuntimeAccountServices {
+    if (!this.accountServices) {
+      throw new Error('Account services are not configured on this runtime')
+    }
+    return this.accountServices
+  }
+
+  getAccountsSnapshot(): AccountsSnapshot {
+    const { claudeAccounts, codexAccounts, rateLimits } = this.requireAccountServices()
+    return {
+      claude: claudeAccounts.listAccounts(),
+      codex: codexAccounts.listAccounts(),
+      rateLimits: rateLimits.getState()
+    }
+  }
+
+  // Why: RateLimitService polls only when the Electron window is visible AND
+  // focused, and the inactive-account caches fill lazily when the user opens
+  // the desktop AccountsPane. Mobile has neither trigger, so without this the
+  // phone shows 0% / "—" against a backgrounded desktop. Errors swallowed
+  // because partial usage is still useful for the rest of the snapshot.
+  async refreshAccountsForMobile(): Promise<void> {
+    const { rateLimits } = this.requireAccountServices()
+    await Promise.allSettled([
+      rateLimits.refresh(),
+      rateLimits.fetchInactiveClaudeAccountsOnOpen(),
+      rateLimits.fetchInactiveCodexAccountsOnOpen()
+    ])
+  }
+
+  selectClaudeAccount(accountId: string | null): Promise<ClaudeRateLimitAccountsState> {
+    return this.requireAccountServices().claudeAccounts.selectAccount(accountId)
+  }
+
+  selectCodexAccount(accountId: string | null): Promise<CodexRateLimitAccountsState> {
+    return this.requireAccountServices().codexAccounts.selectAccount(accountId)
+  }
+
+  removeClaudeAccount(accountId: string): Promise<ClaudeRateLimitAccountsState> {
+    return this.requireAccountServices().claudeAccounts.removeAccount(accountId)
+  }
+
+  removeCodexAccount(accountId: string): Promise<CodexRateLimitAccountsState> {
+    return this.requireAccountServices().codexAccounts.removeAccount(accountId)
+  }
+
+  // Why: rate-limit polling fires every 5 minutes and on account switch.
+  // Mobile clients subscribe to receive a fresh AccountsSnapshot whenever
+  // RateLimitService pushes new usage data, mirroring the existing
+  // `rateLimits:update` IPC channel desktop already uses.
+  onAccountsChanged(listener: (snapshot: AccountsSnapshot) => void): () => void {
+    const services = this.requireAccountServices()
+    return services.rateLimits.onStateChange(() => {
+      listener({
+        claude: services.claudeAccounts.listAccounts(),
+        codex: services.codexAccounts.listAccounts(),
+        rateLimits: services.rateLimits.getState()
+      })
+    })
   }
 
   // ─── Mobile Fit Override Management ─────────────────────────
@@ -2810,8 +2967,14 @@ export class OrcaRuntimeService {
     }
 
     const worktreeId = `${repo.id}::${created.path}`
+    const now = Date.now()
     const meta = this.store.setWorktreeMeta(worktreeId, {
-      lastActivityAt: Date.now(),
+      lastActivityAt: now,
+      // See createRemoteWorktree: createdAt grants the new worktree a grace
+      // window in Recent sort so ambient PTY bumps in OTHER worktrees can't
+      // push it down before the user has had a chance to notice it. Smart-sort
+      // uses max(lastActivityAt, createdAt + CREATE_GRACE_MS).
+      createdAt: now,
       ...(shouldSetDisplayName(requestedName, branchName, sanitizedName)
         ? { displayName: requestedName }
         : {}),
@@ -5695,7 +5858,14 @@ function getLeafWorktreeStatus(
   leaf: RuntimeLeafRecord,
   tabTitle: string | null
 ): RuntimeWorktreeStatus {
-  const detected = leaf.lastAgentStatus ?? detectAgentStatusFromTitle(leaf.title ?? tabTitle ?? '')
+  // Why: recompute from the live title each call so worktree.ps mirrors what
+  // the desktop sidebar's getWorktreeStatus does (no sticky state). Prefer
+  // the runtime-tracked OSC title (covers daemon-hosted terminals) over the
+  // renderer-pushed leaf.title and the tab title. Falling back to
+  // lastAgentStatus only when no title is available preserves a sensible
+  // signal for very fresh leaves before any title has been observed.
+  const liveTitle = leaf.lastOscTitle ?? leaf.title ?? tabTitle ?? ''
+  const detected = liveTitle ? detectAgentStatusFromTitle(liveTitle) : leaf.lastAgentStatus
   if (detected === 'permission') {
     return 'permission'
   }

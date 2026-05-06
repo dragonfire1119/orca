@@ -793,6 +793,46 @@ describe('OrcaRuntimeService', () => {
     })
   })
 
+  it('clears stale working status after the agent exits and the shell takes over the title', async () => {
+    // Why: regression test for issue #1437 — the mobile worktree-list spinner
+    // kept playing forever because lastAgentStatus was sticky on 'working'
+    // once an agent exited without emitting an idle/agent-shaped final OSC
+    // title. worktree.ps must recompute from the live OSC title each call.
+    const runtime = new OrcaRuntimeService(store)
+
+    runtime.attachWindow(1)
+    runtime.syncWindowGraph(1, {
+      tabs: [
+        {
+          tabId: 'tab-1',
+          worktreeId: 'repo-1::/tmp/worktree-a',
+          title: 'Codex working',
+          activeLeafId: 'pane:1',
+          layout: null
+        }
+      ],
+      leaves: [
+        {
+          tabId: 'tab-1',
+          worktreeId: 'repo-1::/tmp/worktree-a',
+          leafId: 'pane:1',
+          paneRuntimeId: 1,
+          ptyId: 'pty-1'
+        }
+      ]
+    })
+
+    runtime.onPtyData('pty-1', '\x1b]0;Codex working\x07', 100)
+    const working = await runtime.getWorktreePs()
+    expect(working.worktrees[0].status).toBe('working')
+
+    // Agent exits, shell title takes over — desktop's getWorktreeStatus would
+    // immediately flip back to 'active'. Mobile must do the same.
+    runtime.onPtyData('pty-1', '\x1b]0;bash\x07', 200)
+    const afterExit = await runtime.getWorktreePs()
+    expect(afterExit.worktrees[0].status).toBe('active')
+  })
+
   it('fails terminal stop closed while the renderer graph is reloading', async () => {
     const runtime = new OrcaRuntimeService(store)
     let killed = false
@@ -1062,6 +1102,54 @@ describe('OrcaRuntimeService', () => {
         'orca.yaml setup hook skipped for /tmp/workspaces/runtime-hook-skip; pass --run-hooks to run it.'
     })
     expect(activateWorktree).toHaveBeenCalledWith('repo-1', expect.any(String), undefined)
+  })
+
+  it('stamps createdAt alongside lastActivityAt so CLI-created worktrees get the Recent-sort grace window', async () => {
+    // Why: parity with createLocalWorktree / createRemoteWorktree. Without
+    // createdAt, ambient PTY bumps in OTHER worktrees during the few seconds
+    // after creation can push the new worktree below them in Recent sort.
+    const runtime = new OrcaRuntimeService(store)
+    runtime.setNotifier({
+      worktreesChanged: vi.fn(),
+      reposChanged: vi.fn(),
+      activateWorktree: vi.fn(),
+      createTerminal: vi.fn(),
+      splitTerminal: vi.fn(),
+      renameTerminal: vi.fn(),
+      focusTerminal: vi.fn(),
+      closeTerminal: vi.fn(),
+      sleepWorktree: vi.fn(),
+      terminalFitOverrideChanged: vi.fn(),
+      terminalDriverChanged: vi.fn()
+    })
+    runtime.attachWindow(1)
+
+    computeWorktreePathMock.mockReturnValue('/tmp/workspaces/runtime-grace')
+    ensurePathWithinWorkspaceMock.mockReturnValue('/tmp/workspaces/runtime-grace')
+    vi.mocked(getEffectiveHooks).mockReturnValue({ scripts: {} })
+    vi.mocked(listWorktrees).mockResolvedValueOnce([
+      {
+        path: '/tmp/workspaces/runtime-grace',
+        head: 'def',
+        branch: 'runtime-grace',
+        isBare: false,
+        isMainWorktree: false
+      }
+    ])
+
+    const before = Date.now()
+    const result = await runtime.createManagedWorktree({
+      repoSelector: 'id:repo-1',
+      name: 'runtime-grace'
+    })
+    const after = Date.now()
+
+    expect(result.worktree.createdAt).toBeDefined()
+    expect(result.worktree.createdAt).toBeGreaterThanOrEqual(before)
+    expect(result.worktree.createdAt).toBeLessThanOrEqual(after)
+    // Both fields must be stamped from the same `now` so the grace-window
+    // math (max(lastActivityAt, createdAt + GRACE_MS)) is well-defined.
+    expect(result.worktree.createdAt).toBe(result.worktree.lastActivityAt)
   })
 
   it('skips archive hooks for CLI worktree removal by default', async () => {
