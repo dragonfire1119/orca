@@ -378,8 +378,13 @@ export function useComposerState(options: UseComposerStateOptions): UseComposerS
   )
   const selectedRepoPath = selectedRepo?.path
   useEffect(() => {
+    // Why: clear synchronously on every change so a repo switch (path A → B)
+    // invalidates the prior slug until the new IPC call resolves. Without
+    // this, effectiveLinkedPR would accept a PR URL whose slug matches the
+    // previous repo during the in-flight window — exactly the cross-repo
+    // mislink the slug guard is meant to prevent.
+    setSelectedRepoSlug(null)
     if (!selectedRepoPath) {
-      setSelectedRepoSlug(null)
       return
     }
     let cancelled = false
