@@ -20,6 +20,7 @@ import {
 } from './layout-serialization'
 import { warnTerminalLifecycleAnomaly } from './terminal-lifecycle-diagnostics'
 import { detectDeveloperPermissionHint } from './developer-permission-hints'
+import { openDeveloperPermissionsSettings } from '@/lib/developer-permissions-settings-link'
 import { registerPtySerializer, registerPtyTitleSource } from './pty-buffer-serializer'
 
 const pendingSpawnByPaneKey = new Map<string, Promise<string | null>>()
@@ -110,14 +111,7 @@ function maybeShowDeveloperPermissionHint(worktreeId: string, data: string): voi
     duration: 12000,
     action: {
       label: 'Open Permissions',
-      onClick: () => {
-        useAppStore.getState().openSettingsTarget({
-          pane: 'developer-permissions',
-          repoId: null,
-          sectionId: 'developer-permissions'
-        })
-        useAppStore.getState().openSettingsPage()
-      }
+      onClick: openDeveloperPermissionsSettings
     }
   })
 }

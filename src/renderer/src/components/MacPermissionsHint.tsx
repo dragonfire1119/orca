@@ -2,7 +2,8 @@ import { ArrowRight, X } from 'lucide-react'
 
 import { useAppStore } from '@/store'
 import { getConnectionId } from '@/lib/connection-context'
-import type { WorkspaceVisibleTabType } from '../../../../shared/types'
+import { openDeveloperPermissionsSettings } from '@/lib/developer-permissions-settings-link'
+import type { WorkspaceVisibleTabType } from '../../../shared/types'
 
 type MacPermissionsHintProps = {
   activeView: 'terminal' | 'settings' | 'tasks'
@@ -10,10 +11,9 @@ type MacPermissionsHintProps = {
   activeWorktreeId: string | null
 }
 
-// One-line dismissible breadcrumb that points users at Settings → Permissions
-// before they hit a silent permission-denied failure. Passive structural hint
-// shown unconditionally on local Mac terminals, complementing the targeted
-// pty-output keyword detector in pty-connection.ts.
+// Passive over eager: Superset-style osascript probes at app.whenReady were
+// verified to silently fail under TCC (no Privacy → Automation row appears),
+// so we rely on discoverability into DeveloperPermissionsPane instead.
 export function MacPermissionsHint({
   activeView,
   activeTabType,
@@ -21,28 +21,21 @@ export function MacPermissionsHint({
 }: MacPermissionsHintProps): React.JSX.Element | null {
   const dismissed = useAppStore((s) => s.terminalMacPermissionsHintDismissed)
   const dismiss = useAppStore((s) => s.dismissTerminalMacPermissionsHint)
-  const openSettingsTarget = useAppStore((s) => s.openSettingsTarget)
-  const openSettingsPage = useAppStore((s) => s.openSettingsPage)
+  // Why: persisted dismissal arrives async after first paint; without this
+  // gate, returning users see the hint flash before the `?? false` hydrate
+  // resolves to `true` and removes it.
+  const persistedUIReady = useAppStore((s) => s.persistedUIReady)
 
   // Why: TCC (the macOS permission system) is host-local — a Mac client
-  // SSH'd into a remote worktree can't grant permissions on the remote, and
-  // a non-Mac client never needs them. Gate hard on both.
-  const isMac = navigator.userAgent.includes('Mac')
+  // SSH'd into a remote worktree can't grant permissions on the remote.
+  // (The Mac platform check itself lives at the call site so non-Mac
+  // platforms don't instantiate the component at all.)
   const isLocalWorktree = getConnectionId(activeWorktreeId) === null
   const isTerminalView =
     activeView === 'terminal' && activeTabType === 'terminal' && activeWorktreeId !== null
 
-  if (!isMac || !isTerminalView || !isLocalWorktree || dismissed) {
+  if (!persistedUIReady || !isTerminalView || !isLocalWorktree || dismissed) {
     return null
-  }
-
-  const handleOpenSettings = (): void => {
-    openSettingsTarget({
-      pane: 'developer-permissions',
-      repoId: null,
-      sectionId: 'developer-permissions'
-    })
-    openSettingsPage()
   }
 
   return (
@@ -50,7 +43,7 @@ export function MacPermissionsHint({
       <span className="flex-1 truncate">Need macOS device permissions for CLIs?</span>
       <button
         type="button"
-        onClick={handleOpenSettings}
+        onClick={openDeveloperPermissionsSettings}
         className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-foreground underline-offset-2 hover:bg-muted hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         Settings · Permissions
