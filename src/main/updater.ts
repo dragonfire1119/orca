@@ -247,8 +247,14 @@ async function sendCheckFailureStatus(message: string, userInitiated?: boolean):
         if (pendingTransitionRetryTimer) {
           clearTimeout(pendingTransitionRetryTimer)
         }
+        // Why: each timer callback clears the other so app-nap-delayed events
+        // can't trigger two concurrent autoUpdater.checkForUpdates() calls.
         pendingTransitionRetryTimer = setTimeout(() => {
           pendingTransitionRetryTimer = null
+          if (pendingTransitionBackstopTimer) {
+            clearTimeout(pendingTransitionBackstopTimer)
+            pendingTransitionBackstopTimer = null
+          }
           forceLaunchUpdateCheck({ userInitiated: Boolean(userInitiated) })
         }, TRANSITION_RETRY_DELAY_MS)
         // Why: belt-and-suspenders for macOS app-nap, where a throttled 30s
@@ -261,6 +267,10 @@ async function sendCheckFailureStatus(message: string, userInitiated?: boolean):
         }
         pendingTransitionBackstopTimer = setTimeout(() => {
           pendingTransitionBackstopTimer = null
+          if (pendingTransitionRetryTimer) {
+            clearTimeout(pendingTransitionRetryTimer)
+            pendingTransitionRetryTimer = null
+          }
           forceLaunchUpdateCheck({ userInitiated: Boolean(userInitiated) })
         }, AUTO_UPDATE_RETRY_INTERVAL_MS)
         return
@@ -271,14 +281,7 @@ async function sendCheckFailureStatus(message: string, userInitiated?: boolean):
       // scheduled autoUpdateCheckTimer below, then fall through to today's
       // behavior.
       transitionRetryInFlight = false
-      if (pendingTransitionRetryTimer) {
-        clearTimeout(pendingTransitionRetryTimer)
-        pendingTransitionRetryTimer = null
-      }
-      if (pendingTransitionBackstopTimer) {
-        clearTimeout(pendingTransitionBackstopTimer)
-        pendingTransitionBackstopTimer = null
-      }
+      clearPendingTransitionRetryTimer()
       clearAvailableUpdateContext()
       scheduleAutomaticUpdateCheck(AUTO_UPDATE_RETRY_INTERVAL_MS)
       if (userInitiated) {
@@ -289,10 +292,7 @@ async function sendCheckFailureStatus(message: string, userInitiated?: boolean):
         // actionable cause. Shown only after the 30s retry has also failed,
         // so "shortly" would be misleading — next automatic attempt is up
         // to 1h away.
-        sendErrorStatus(
-          "Couldn't reach the update server. Try again in a few minutes.",
-          true
-        )
+        sendErrorStatus("Couldn't reach the update server. Try again in a few minutes.", true)
       } else {
         sendStatus({ state: 'idle' })
       }
@@ -303,14 +303,7 @@ async function sendCheckFailureStatus(message: string, userInitiated?: boolean):
     // both timers so they don't strand state and silently no-op every
     // subsequent manual click.
     transitionRetryInFlight = false
-    if (pendingTransitionRetryTimer) {
-      clearTimeout(pendingTransitionRetryTimer)
-      pendingTransitionRetryTimer = null
-    }
-    if (pendingTransitionBackstopTimer) {
-      clearTimeout(pendingTransitionBackstopTimer)
-      pendingTransitionBackstopTimer = null
-    }
+    clearPendingTransitionRetryTimer()
     clearAvailableUpdateContext()
     persistLastUpdateCheckAt?.(Date.now())
     if (!userInitiated) {
@@ -433,9 +426,15 @@ export function checkForUpdates(): void {
 function forceLaunchUpdateCheck(opts: { userInitiated: boolean }): void {
   userInitiatedCheck = opts.userInitiated
   const launch = (): Promise<unknown> => autoUpdater.checkForUpdates()
-  const run = shouldResolvePrereleaseFeed() ? pinPrereleaseFeed().then(launch) : launch()
-  void Promise.resolve(run).catch((err) => {
-    void sendCheckFailureStatus(String(err?.message ?? err), opts.userInitiated)
+  // Why: Promise.resolve().then(launch) on the non-prerelease branch converts
+  // a synchronous throw from autoUpdater.checkForUpdates into a rejection so
+  // the .catch below runs. Without this, a sync throw escapes the setTimeout
+  // callback and strands transitionRetryInFlight = true forever.
+  const run = shouldResolvePrereleaseFeed()
+    ? pinPrereleaseFeed().then(launch)
+    : Promise.resolve().then(launch)
+  void run.catch((err) => {
+    void sendCheckFailureStatus(String(err?.message ?? err), opts.userInitiated || undefined)
   })
 }
 

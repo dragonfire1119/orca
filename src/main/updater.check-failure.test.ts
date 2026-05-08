@@ -177,6 +177,25 @@ describe('updater check failure handling', () => {
     expect(autoUpdaterMock.checkForUpdates).toHaveBeenCalledTimes(2)
   })
 
+  it('schedules a 1h backstop alongside the 30s retry so app-nap can recover the cadence', async () => {
+    vi.useFakeTimers()
+    makeBenignReleaseTransitionFailure()
+
+    const mainWindow = { webContents: { send: vi.fn() } }
+    const { setupAutoUpdater, checkForUpdatesFromMenu } = await import('./updater')
+
+    setupAutoUpdater(mainWindow as never, { getLastUpdateCheckAt: () => Date.now() })
+
+    // Capture timer count after setup (background nudge poll, 24h auto-check).
+    const baselineTimerCount = vi.getTimerCount()
+
+    checkForUpdatesFromMenu()
+    await vi.advanceTimersByTimeAsync(0)
+
+    // Two new timers must be scheduled: the 30s retry AND the 1h backstop.
+    expect(vi.getTimerCount()).toBe(baselineTimerCount + 2)
+  })
+
   it('surfaces the calmer copy after the 30s retry also fails benignly', async () => {
     vi.useFakeTimers()
     makeBenignReleaseTransitionFailure()

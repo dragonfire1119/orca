@@ -76,11 +76,6 @@ export function registerAutoUpdaterHandlers({
   }
 
   app.on('before-quit', (event) => {
-    // Why: avoid a stale 30s retry or 1h-backstop firing during shutdown.
-    // onBeforeQuitCleanup in updater.ts only fires from performQuitAndInstall,
-    // not user quit, so the cleanup must live here.
-    clearPendingTransitionRetryTimer()
-    clearTransitionRetryInFlight()
     if (consumeMacInstallGuardBypass() || isMacQuitAndInstallInFlight()) {
       return
     }
@@ -99,7 +94,14 @@ export function registerAutoUpdaterHandlers({
       )
     ) {
       event.preventDefault()
+      return
     }
+
+    // Why: avoid a stale 30s retry or 1h-backstop firing during shutdown.
+    // onBeforeQuitCleanup in updater.ts only fires from performQuitAndInstall,
+    // not user quit, so the cleanup must live here.
+    clearPendingTransitionRetryTimer()
+    clearTransitionRetryInFlight()
   })
 
   autoUpdater.on('checking-for-update', () => {
