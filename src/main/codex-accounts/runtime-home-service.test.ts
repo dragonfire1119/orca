@@ -137,11 +137,17 @@ function encodeJwtPart(value: Record<string, unknown>): string {
   return Buffer.from(JSON.stringify(value)).toString('base64url')
 }
 
-function createCodexAuthJson(email: string, accountId: string, refreshToken: string): string {
+function createCodexAuthJson(
+  email: string,
+  accountId: string,
+  refreshToken: string,
+  expiresAt?: number
+): string {
   const idToken = [
     encodeJwtPart({ alg: 'none', typ: 'JWT' }),
     encodeJwtPart({
       email,
+      ...(expiresAt === undefined ? {} : { exp: expiresAt }),
       'https://api.openai.com/auth': {
         chatgpt_account_id: accountId,
         workspace_account_id: accountId
@@ -154,6 +160,7 @@ function createCodexAuthJson(email: string, accountId: string, refreshToken: str
     tokens: {
       id_token: idToken,
       account_id: accountId,
+      ...(expiresAt === undefined ? {} : { expires_at: expiresAt }),
       refresh_token: refreshToken
     }
   })}\n`
@@ -1083,8 +1090,8 @@ describe('CodexRuntimeHomeService', () => {
 
   it('reads back verified same-account refreshes on first sync after restart', async () => {
     const runtimeAuthPath = join(testState.fakeHomeDir, '.codex', 'auth.json')
-    const originalAuth = createCodexAuthJson('user@example.com', 'acct-1', 'original')
-    const refreshedAuth = createCodexAuthJson('user@example.com', 'acct-1', 'refreshed')
+    const originalAuth = createCodexAuthJson('user@example.com', 'acct-1', 'original', 1_000)
+    const refreshedAuth = createCodexAuthJson('user@example.com', 'acct-1', 'refreshed', 2_000)
     writeFileSync(runtimeAuthPath, refreshedAuth, 'utf-8')
     const managedHomePath = createManagedAuth(testState.userDataDir, 'account-1', originalAuth)
     const managedAuthPath = join(managedHomePath, 'auth.json')
@@ -1112,6 +1119,39 @@ describe('CodexRuntimeHomeService', () => {
 
     expect(readFileSync(managedAuthPath, 'utf-8')).toBe(refreshedAuth)
     expect(readFileSync(runtimeAuthPath, 'utf-8')).toBe(refreshedAuth)
+  })
+
+  it('rejects older same-account Codex auth on first sync after restart', async () => {
+    const runtimeAuthPath = join(testState.fakeHomeDir, '.codex', 'auth.json')
+    const staleRuntimeAuth = createCodexAuthJson('user@example.com', 'acct-1', 'stale', 1_000)
+    const managedAuth = createCodexAuthJson('user@example.com', 'acct-1', 'managed-newer', 2_000)
+    writeFileSync(runtimeAuthPath, staleRuntimeAuth, 'utf-8')
+    const managedHomePath = createManagedAuth(testState.userDataDir, 'account-1', managedAuth)
+    const managedAuthPath = join(managedHomePath, 'auth.json')
+    const store = createStore(
+      createSettings({
+        codexManagedAccounts: [
+          {
+            id: 'account-1',
+            email: 'user@example.com',
+            managedHomePath,
+            providerAccountId: 'acct-1',
+            workspaceLabel: null,
+            workspaceAccountId: 'acct-1',
+            createdAt: 1,
+            updatedAt: 1,
+            lastAuthenticatedAt: 1
+          }
+        ],
+        activeCodexManagedAccountId: 'account-1'
+      })
+    )
+
+    const { CodexRuntimeHomeService } = await import('./runtime-home-service')
+    new CodexRuntimeHomeService(store as never)
+
+    expect(readFileSync(managedAuthPath, 'utf-8')).toBe(managedAuth)
+    expect(readFileSync(runtimeAuthPath, 'utf-8')).toBe(managedAuth)
   })
 
   it('does not contaminate the incoming Codex account during account switch', async () => {

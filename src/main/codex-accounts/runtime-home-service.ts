@@ -31,7 +31,12 @@ type CodexSystemDefaultSnapshot = {
 
 type CodexReadBackResult = 'unchanged' | 'persisted' | 'rejected'
 type CodexReadBackMatch =
-  | { kind: 'matched'; account: CodexManagedAccount; managedAuthPath: string }
+  | {
+      kind: 'matched'
+      account: CodexManagedAccount
+      managedAuthPath: string
+      managedAuthContents: string
+    }
   | { kind: 'none' | 'ambiguous' }
 
 export class CodexRuntimeHomeService {
@@ -150,7 +155,9 @@ export class CodexRuntimeHomeService {
   // so the read-back must be skipped to avoid overwriting them with stale
   // runtime tokens.
   clearLastWrittenAuthJson(accountId = this.store.getSettings().activeCodexManagedAccountId): void {
-    this.lastWrittenAuthJson = null
+    if (accountId === this.store.getSettings().activeCodexManagedAccountId) {
+      this.lastWrittenAuthJson = null
+    }
     this.skipNextReadBackForAccountId = accountId
   }
 
@@ -173,6 +180,14 @@ export class CodexRuntimeHomeService {
         if (match.kind === 'ambiguous') {
           console.warn('[codex-runtime-home] Refusing ambiguous Codex auth read-back')
         }
+        return 'rejected'
+      }
+      // Why: after app restart, Orca has no last-written baseline. Identity
+      // alone cannot prove runtime auth is newer than managed storage.
+      if (
+        this.lastWrittenAuthJson === null &&
+        !this.runtimeAuthIsFresher(runtimeContents, match.managedAuthContents)
+      ) {
         return 'rejected'
       }
 
@@ -216,20 +231,19 @@ export class CodexRuntimeHomeService {
   }
 
   private findManagedAccountForRuntimeAuth(runtimeAuthContents: string): CodexReadBackMatch {
-    const matches: { account: CodexManagedAccount; managedAuthPath: string }[] = []
+    const matches: {
+      account: CodexManagedAccount
+      managedAuthPath: string
+      managedAuthContents: string
+    }[] = []
     for (const account of this.store.getSettings().codexManagedAccounts) {
       const managedAuthPath = join(account.managedHomePath, 'auth.json')
       if (!existsSync(managedAuthPath)) {
         continue
       }
-      if (
-        this.runtimeAuthMatchesAccount(
-          runtimeAuthContents,
-          account,
-          readFileSync(managedAuthPath, 'utf-8')
-        )
-      ) {
-        matches.push({ account, managedAuthPath })
+      const managedAuthContents = readFileSync(managedAuthPath, 'utf-8')
+      if (this.runtimeAuthMatchesAccount(runtimeAuthContents, account, managedAuthContents)) {
+        matches.push({ account, managedAuthPath, managedAuthContents })
       }
     }
 
@@ -289,6 +303,14 @@ export class CodexRuntimeHomeService {
     )
   }
 
+  private runtimeAuthIsFresher(runtimeAuthContents: string, managedAuthContents: string): boolean {
+    const runtimeFreshness = this.readFreshnessFromAuthContents(runtimeAuthContents)
+    const managedFreshness = this.readFreshnessFromAuthContents(managedAuthContents)
+    return (
+      runtimeFreshness !== null && managedFreshness !== null && runtimeFreshness > managedFreshness
+    )
+  }
+
   private identityFieldMatches(selectedField: string | null, runtimeField: string | null): boolean {
     return !selectedField || Boolean(runtimeField && selectedField === runtimeField)
   }
@@ -332,6 +354,29 @@ export class CodexRuntimeHomeService {
     }
   }
 
+  private readFreshnessFromAuthContents(contents: string): number | null {
+    let raw: Record<string, unknown>
+    try {
+      raw = JSON.parse(contents) as Record<string, unknown>
+    } catch {
+      return null
+    }
+
+    const tokens = this.readRecordClaim(raw, 'tokens')
+    const idToken = this.normalizeField(
+      this.readStringClaim(tokens, 'id_token') ?? this.readStringClaim(tokens, 'idToken')
+    )
+    const payload = idToken ? this.parseJwtPayload(idToken) : null
+    return (
+      this.readNumberClaim(tokens, 'expires_at') ??
+      this.readNumberClaim(tokens, 'expiresAt') ??
+      this.readNumberClaim(tokens, 'expiry') ??
+      this.readNumberClaim(tokens, 'expires') ??
+      this.readNumberClaim(payload, 'exp') ??
+      this.readNumberClaim(payload, 'iat')
+    )
+  }
+
   private parseJwtPayload(token: string): Record<string, unknown> | null {
     const parts = token.split('.')
     if (parts.length < 2) {
@@ -365,6 +410,18 @@ export class CodexRuntimeHomeService {
   private readStringClaim(value: Record<string, unknown> | null, key: string): string | null {
     const claim = value?.[key]
     return typeof claim === 'string' ? claim : null
+  }
+
+  private readNumberClaim(value: Record<string, unknown> | null, key: string): number | null {
+    const claim = value?.[key]
+    if (typeof claim === 'number' && Number.isFinite(claim)) {
+      return claim
+    }
+    if (typeof claim === 'string') {
+      const parsed = Number(claim)
+      return Number.isFinite(parsed) ? parsed : null
+    }
+    return null
   }
 
   private normalizeField(value: string | null | undefined): string | null {

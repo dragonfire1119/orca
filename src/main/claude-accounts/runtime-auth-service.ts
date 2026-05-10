@@ -186,7 +186,9 @@ export class ClaudeRuntimeAuthService {
   clearLastWrittenCredentialsJson(
     accountId = this.store.getSettings().activeClaudeManagedAccountId
   ): void {
-    this.lastWrittenCredentialsJson = null
+    if (accountId === this.store.getSettings().activeClaudeManagedAccountId) {
+      this.lastWrittenCredentialsJson = null
+    }
     this.skipNextReadBackForAccountId = accountId
   }
 
@@ -211,6 +213,15 @@ export class ClaudeRuntimeAuthService {
         if (match.kind === 'ambiguous') {
           console.warn('[claude-runtime-auth] Refusing ambiguous Claude auth read-back')
         }
+        return { status: 'rejected' }
+      }
+      // Why: on cold app start we cannot tell whether matching runtime
+      // credentials are a fresh CLI refresh or stale state unless token
+      // metadata proves runtime is newer than managed storage.
+      if (
+        this.lastWrittenCredentialsJson === null &&
+        !this.runtimeCredentialsAreFresher(runtimeContents, baselineCredentialsJson)
+      ) {
         return { status: 'rejected' }
       }
 
@@ -376,6 +387,33 @@ export class ClaudeRuntimeAuthService {
     }
   }
 
+  private runtimeCredentialsAreFresher(
+    runtimeCredentialsJson: string,
+    managedCredentialsJson: string
+  ): boolean {
+    const runtimeFreshness = this.readFreshnessFromCredentials(runtimeCredentialsJson)
+    const managedFreshness = this.readFreshnessFromCredentials(managedCredentialsJson)
+    return (
+      runtimeFreshness !== null && managedFreshness !== null && runtimeFreshness > managedFreshness
+    )
+  }
+
+  private readFreshnessFromCredentials(credentialsJson: string): number | null {
+    let parsed: Record<string, unknown>
+    try {
+      parsed = JSON.parse(credentialsJson) as Record<string, unknown>
+    } catch {
+      return null
+    }
+    const oauth = this.asRecord(parsed.claudeAiOauth)
+    return (
+      this.readNumber(oauth, 'expiresAt') ??
+      this.readNumber(oauth, 'expires_at') ??
+      this.readNumber(oauth, 'expiry') ??
+      this.readNumber(oauth, 'expires')
+    )
+  }
+
   private readIdentityFromOauthAccount(oauthAccount: unknown): ClaudeAuthIdentity {
     const oauth = this.asRecord(oauthAccount)
     return {
@@ -398,6 +436,18 @@ export class ClaudeRuntimeAuthService {
   private readString(value: Record<string, unknown> | null, key: string): string | null {
     const candidate = value?.[key]
     return typeof candidate === 'string' ? candidate : null
+  }
+
+  private readNumber(value: Record<string, unknown> | null, key: string): number | null {
+    const candidate = value?.[key]
+    if (typeof candidate === 'number' && Number.isFinite(candidate)) {
+      return candidate
+    }
+    if (typeof candidate === 'string') {
+      const parsed = Number(candidate)
+      return Number.isFinite(parsed) ? parsed : null
+    }
+    return null
   }
 
   private normalizeField(value: string | null | undefined): string | null {
