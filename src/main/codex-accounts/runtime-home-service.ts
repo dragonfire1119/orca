@@ -585,7 +585,10 @@ export class CodexRuntimeHomeService {
 
     const snapshot = this.readSystemDefaultSnapshot(snapshotPath)
     if (!snapshot) {
-      this.writeRuntimeAuth(readFileSync(snapshotPath, 'utf-8'))
+      console.warn('[codex-runtime-home] Ignoring invalid system-default auth snapshot')
+      rmSync(snapshotPath, { force: true })
+      rmSync(this.getRuntimeAuthPath(), { force: true })
+      this.lastWrittenAuthJson = null
       return
     }
     if (snapshot.authJson === null) {

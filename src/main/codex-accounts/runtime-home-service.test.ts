@@ -334,6 +334,51 @@ describe('CodexRuntimeHomeService', () => {
     expect(existsSync(runtimeAuthPath)).toBe(false)
   })
 
+  it('removes runtime auth when deselecting with a corrupt system-default snapshot', async () => {
+    const runtimeAuthPath = join(testState.fakeHomeDir, '.codex', 'auth.json')
+    writeFileSync(runtimeAuthPath, '{"account":"system"}\n', 'utf-8')
+    const managedAuth = createCodexAuthJson('user@example.com', 'acct-1', 'managed')
+    const managedHomePath = createManagedAuth(testState.userDataDir, 'account-1', managedAuth)
+    const settings = createSettings({
+      codexManagedAccounts: [
+        {
+          id: 'account-1',
+          email: 'user@example.com',
+          managedHomePath,
+          providerAccountId: 'acct-1',
+          workspaceLabel: null,
+          workspaceAccountId: 'acct-1',
+          createdAt: 1,
+          updatedAt: 1,
+          lastAuthenticatedAt: 1
+        }
+      ],
+      activeCodexManagedAccountId: null
+    })
+    const store = createStore(settings)
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const { CodexRuntimeHomeService } = await import('./runtime-home-service')
+    const service = new CodexRuntimeHomeService(store as never)
+    settings.activeCodexManagedAccountId = 'account-1'
+    service.syncForCurrentSelection()
+
+    const snapshotPath = join(
+      testState.userDataDir,
+      'codex-runtime-home',
+      'system-default-auth.json'
+    )
+    writeFileSync(snapshotPath, '{not valid json', 'utf-8')
+    settings.activeCodexManagedAccountId = null
+    service.syncForCurrentSelection()
+
+    expect(existsSync(runtimeAuthPath)).toBe(false)
+    expect(existsSync(snapshotPath)).toBe(false)
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[codex-runtime-home] Ignoring invalid system-default auth snapshot'
+    )
+  })
+
   it('clears an invalid active account selection and removes untrusted runtime auth', async () => {
     const runtimeAuthPath = join(testState.fakeHomeDir, '.codex', 'auth.json')
     writeFileSync(runtimeAuthPath, '{"account":"system"}\n', 'utf-8')
