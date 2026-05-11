@@ -12,9 +12,9 @@
 
 import { createServer, createConnection, type Socket, type Server } from 'net'
 import { homedir } from 'os'
-import { resolve, join } from 'path'
-import { unlinkSync, existsSync } from 'fs'
-import { RELAY_SENTINEL } from './protocol'
+import { resolve, join, dirname } from 'path'
+import { unlinkSync, existsSync, readFileSync, writeFileSync } from 'fs'
+import { RELAY_SENTINEL, RELAY_VERSION } from './protocol'
 import { RelayDispatcher } from './dispatcher'
 import { RelayContext } from './context'
 import { PtyHandler } from './pty-handler'
@@ -119,6 +119,15 @@ function main(): void {
     runConnectMode(sockPath)
     return
   }
+
+  // Why: a redeployment can rewrite relay.js + .version on disk while a
+  // previously launched daemon keeps running its in-memory copy of the OLD
+  // code. The client side polls this marker after a --connect attempt; if
+  // it disagrees with the locally deployed .version, the client kills this
+  // daemon and fresh-launches one. Writing the marker here (and ONLY when a
+  // daemon process actually starts) ties the on-disk value to the running
+  // process's code, not to whatever .version happens to be on disk.
+  writeRunningVersionMarker()
 
   // Why: After an uncaught exception Node's internal state may be corrupted
   // (e.g. half-written buffers, broken invariants). Logging and continuing
@@ -392,6 +401,59 @@ function cleanupSocket(sockPath: string): void {
     }
   } catch {
     /* best-effort */
+  }
+}
+
+// Why: the deploy step writes a content-hashed version marker (e.g.
+// `0.1.0+fcb5e6919e9e`) into `${remoteDir}/.version` next to relay.js. The
+// daemon process running in memory may be from an earlier deploy with a
+// different hash — read the on-disk file at startup so the running daemon's
+// reported version reflects what code it is actually executing. Falls back
+// to RELAY_VERSION alone so the RPC still answers something useful when the
+// marker is missing.
+// Why: anchor marker reads/writes to the directory holding relay.js itself,
+// not process.cwd(). The deployed daemon is launched with `cd ${remoteDir}`
+// so the two coincide in production, but tests spawn the relay from the
+// repo root and would otherwise pollute it with a stray .running-version
+// file. Using process.argv[1] (the entry script path) anchors both helpers
+// to the same directory the deploy step writes .version into.
+function relayScriptDir(): string {
+  const entry = process.argv[1]
+  if (entry) {
+    return dirname(entry)
+  }
+  return process.cwd()
+}
+
+function readRunningRelayVersion(): string {
+  try {
+    const versionFile = join(relayScriptDir(), '.version')
+    if (existsSync(versionFile)) {
+      const v = readFileSync(versionFile, 'utf-8').trim()
+      if (v) {
+        return v
+      }
+    }
+  } catch {
+    /* fall through */
+  }
+  return RELAY_VERSION
+}
+
+// Why: write the version that THIS daemon process is actually running into a
+// sidecar marker that the client can probe via a one-shot SSH command. This
+// is separate from `.version` (which the client overwrites on every deploy
+// regardless of whether a daemon was restarted) so the client can distinguish
+// "on-disk code is current" from "running code is current".
+const RUNNING_VERSION_FILE = '.running-version'
+function writeRunningVersionMarker(): void {
+  try {
+    const v = readRunningRelayVersion()
+    writeFileSync(join(relayScriptDir(), RUNNING_VERSION_FILE), `${v}\n`)
+  } catch (err) {
+    process.stderr.write(
+      `[relay] Could not write running-version marker: ${err instanceof Error ? err.message : String(err)}\n`
+    )
   }
 }
 

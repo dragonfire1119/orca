@@ -17,6 +17,7 @@ import {
   resolveRemoteNodePath
 } from './ssh-relay-deploy-helpers'
 import { shellEscape } from './ssh-connection-utils'
+import { runningRelayMatchesDeployed, killStaleRelayDaemon } from './ssh-relay-running-version'
 
 export type RelayDeployResult = {
   transport: MultiplexerTransport
@@ -111,7 +112,13 @@ async function deployAndLaunchRelayInner(
 
   onProgress?.('Starting relay...')
   console.log('[ssh-relay] Launching relay...')
-  const transport = await launchRelay(conn, remoteRelayDir, graceTimeSeconds, relayInstanceId)
+  const transport = await launchRelay(
+    conn,
+    remoteRelayDir,
+    localRelayDir,
+    graceTimeSeconds,
+    relayInstanceId
+  )
   console.log('[ssh-relay] Relay started successfully')
 
   return { transport, platform }
@@ -276,6 +283,7 @@ function getLocalRelayPath(platform: RelayPlatform): string | null {
 async function launchRelay(
   conn: SshConnection,
   remoteDir: string,
+  localRelayDir: string | null,
   graceTimeSeconds?: number,
   relayInstanceId?: string
 ): Promise<MultiplexerTransport> {
@@ -309,22 +317,38 @@ async function launchRelay(
     )
     console.warn(`[ssh-relay] Socket probe result: "${probeOutput.trim()}"`)
     if (probeOutput.trim() === 'ALIVE') {
-      console.log('[ssh-relay] Existing relay socket found, attempting reconnect...')
-      try {
-        const channel = await conn.exec(
-          `cd ${escapedDir} && ${escapedNode} relay.js --connect --sock-path ${shellEscape(sockFile)}`
-        )
-        const transport = await waitForSentinel(channel)
-        console.log('[ssh-relay] Reconnected to existing relay via socket')
-        return transport
-      } catch (err) {
+      // Why: a redeployment may have rewritten relay.js + .version on disk
+      // while the existing daemon kept running stale in-memory code from a
+      // prior version. Reconnecting via --connect would then drive the OLD
+      // daemon, which can mishandle protocol changes and tear the channel
+      // down in a tight loop. Compare the daemon-written `.running-version`
+      // marker (only updated when a daemon process actually starts) against
+      // the on-disk `.version` (updated on every deploy). On mismatch, kill
+      // the stale daemon so the fresh-launch path below replaces it.
+      const versionsMatch = await runningRelayMatchesDeployed(conn, remoteDir, localRelayDir)
+      if (!versionsMatch) {
         console.warn(
-          '[ssh-relay] Socket reconnect failed, launching fresh relay:',
-          err instanceof Error ? err.message : String(err)
+          '[ssh-relay] Running daemon version differs from deployed code; restarting fresh.'
         )
-        // Why: stale socket from a crashed relay — remove it so the
-        // fresh launch can bind a new socket at the same path.
-        await execCommand(conn, `rm -f ${shellEscape(sockFile)}`).catch(() => {})
+        await killStaleRelayDaemon(conn, remoteDir, sockFile)
+      } else {
+        console.log('[ssh-relay] Existing relay socket found, attempting reconnect...')
+        try {
+          const channel = await conn.exec(
+            `cd ${escapedDir} && ${escapedNode} relay.js --connect --sock-path ${shellEscape(sockFile)}`
+          )
+          const transport = await waitForSentinel(channel)
+          console.log('[ssh-relay] Reconnected to existing relay via socket')
+          return transport
+        } catch (err) {
+          console.warn(
+            '[ssh-relay] Socket reconnect failed, launching fresh relay:',
+            err instanceof Error ? err.message : String(err)
+          )
+          // Why: stale socket from a crashed relay — remove it so the
+          // fresh launch can bind a new socket at the same path.
+          await execCommand(conn, `rm -f ${shellEscape(sockFile)}`).catch(() => {})
+        }
       }
     }
   } catch {
