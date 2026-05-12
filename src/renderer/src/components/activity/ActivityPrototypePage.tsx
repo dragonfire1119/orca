@@ -337,9 +337,16 @@ function AgentEventRow({
       onClick={() => onMarkRead(event)}
     >
       <div className="flex justify-center pt-1">
-        <div className="relative flex size-6 items-center justify-center">
+        <span className="relative inline-flex">
+          {/* Why: anchor the unread dot to the icon's own bounding box (not the
+              24×24 cell) so it tracks the icon's top-left corner regardless of
+              icon size. The previous absolute -left-1 top-1 inside a size-6 box
+              landed visibly off-center against the centered AgentStateDot. */}
           {event.unread ? (
-            <span className="absolute -left-1 top-1 size-2 rounded-full bg-primary" />
+            <span
+              className="absolute -top-1 -left-1 size-2 rounded-full bg-primary ring-2 ring-background"
+              aria-hidden
+            />
           ) : null}
           <Tooltip>
             <TooltipTrigger asChild>
@@ -351,7 +358,7 @@ function AgentEventRow({
               {event.entry.interrupted ? 'Interrupted' : agentStateLabel(dotState)}
             </TooltipContent>
           </Tooltip>
-        </div>
+        </span>
       </div>
 
       <div className="min-w-0">
@@ -433,12 +440,17 @@ function WorktreeEventRow({
       onClick={() => onMarkRead(event)}
     >
       <div className="flex justify-center pt-0.5">
-        <div className="relative flex size-6 items-center justify-center text-muted-foreground">
+        <span className="relative inline-flex text-muted-foreground">
+          {/* Why: see AgentEventRow — anchor the unread dot to the icon, not the
+              cell, so it lines up at the icon's top-left corner. */}
           {event.unread ? (
-            <span className="absolute -left-1 top-1 size-2 rounded-full bg-primary" />
+            <span
+              className="absolute -top-1 -left-1 size-2 rounded-full bg-primary ring-2 ring-background"
+              aria-hidden
+            />
           ) : null}
           <Plus className="size-4" />
-        </div>
+        </span>
       </div>
       <div className="min-w-0">
         <div className="flex min-w-0 items-center gap-2">
