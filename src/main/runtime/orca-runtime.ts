@@ -11,7 +11,7 @@ import { gitExecFileAsync } from '../git/runner'
 import { isWslPath, parseWslPath, getWslHome } from '../wsl'
 import { randomUUID } from 'crypto'
 import { join, posix, win32 } from 'path'
-import { rm } from 'fs/promises'
+import { open, rm, stat } from 'fs/promises'
 import { OrchestrationDb } from './orchestration/db'
 import { formatMessagesForInjection } from './orchestration/formatter'
 import type {
@@ -57,6 +57,7 @@ import type {
   RuntimeMobileSessionTabsSnapshot,
   RuntimeFileListResult,
   RuntimeFileOpenResult,
+  RuntimeFileReadResult,
   RuntimeSyncWindowGraph,
   RuntimeWorktreeListResult,
   BrowserSnapshotResult,
@@ -259,6 +260,7 @@ type RuntimePtyController = {
 }
 
 const MOBILE_FILE_LIST_LIMIT = 5000
+const MOBILE_FILE_READ_MAX_BYTES = 512 * 1024
 const MOBILE_BINARY_EXTENSIONS = new Set([
   '.avif',
   '.bmp',
@@ -980,12 +982,61 @@ export class OrcaRuntimeService {
     return { worktree: worktree.id, relativePath, kind, opened: true }
   }
 
+  async readMobileFile(
+    worktreeSelector: string,
+    relativePath: string
+  ): Promise<RuntimeFileReadResult> {
+    if (!this.store) {
+      throw new Error('runtime_unavailable')
+    }
+    const worktree = await this.resolveWorktreeSelector(worktreeSelector)
+    if (!isSafeMobileRelativePath(relativePath)) {
+      throw new Error('invalid_relative_path')
+    }
+    if (isMobileBinaryPath(relativePath)) {
+      throw new Error('binary_file')
+    }
+
+    const repo = this.store.getRepo(worktree.repoId)
+    const filePath = joinWorktreeRelativePath(worktree.path, relativePath)
+    const content = repo?.connectionId
+      ? await this.readRemoteMobileFile(filePath, repo.connectionId)
+      : await readLocalMobileFile(filePath)
+    const truncated = truncateMobileFilePreview(content)
+
+    return {
+      worktree: worktree.id,
+      relativePath,
+      content: truncated.content,
+      truncated: truncated.truncated,
+      byteLength: truncated.byteLength
+    }
+  }
+
   private async listRemoteMobileFiles(rootPath: string, connectionId: string): Promise<string[]> {
     const provider = getSshFilesystemProvider(connectionId)
     if (!provider) {
       return []
     }
     return provider.listFiles(rootPath)
+  }
+
+  private async readRemoteMobileFile(filePath: string, connectionId: string): Promise<string> {
+    const provider = getSshFilesystemProvider(connectionId)
+    if (!provider) {
+      throw new Error('remote_filesystem_unavailable')
+    }
+    const fileStat = await provider.stat(filePath)
+    // Why: the SSH filesystem API does not expose ranged reads here, so reject
+    // oversized remote previews instead of streaming a large file just to trim it.
+    if (fileStat.size > MOBILE_FILE_READ_MAX_BYTES) {
+      throw new Error('file_too_large')
+    }
+    const result = await provider.readFile(filePath)
+    if (result.isBinary) {
+      throw new Error('binary_file')
+    }
+    return result.content
   }
 
   onMobileSessionTabsChanged(
@@ -7094,6 +7145,37 @@ function joinWorktreeRelativePath(rootPath: string, relativePath: string): strin
     return win32.join(rootPath, ...normalizedRelativePath.split('/'))
   }
   return posix.join(rootPath, ...normalizedRelativePath.split('/'))
+}
+
+async function readLocalMobileFile(filePath: string): Promise<string> {
+  const fileStat = await stat(filePath)
+  // Why: mobile file previews are read-only convenience views; cap the read so
+  // opening a generated log or bundle cannot block the WebSocket like oversized scrollback.
+  const readLimit = Math.min(fileStat.size, MOBILE_FILE_READ_MAX_BYTES + 1)
+  const handle = await open(filePath, 'r')
+  try {
+    const buffer = Buffer.alloc(readLimit)
+    const { bytesRead } = await handle.read(buffer, 0, readLimit, 0)
+    return buffer.subarray(0, bytesRead).toString('utf8')
+  } finally {
+    await handle.close()
+  }
+}
+
+function truncateMobileFilePreview(content: string): {
+  content: string
+  truncated: boolean
+  byteLength: number
+} {
+  const buffer = Buffer.from(content, 'utf8')
+  if (buffer.byteLength <= MOBILE_FILE_READ_MAX_BYTES) {
+    return { content, truncated: false, byteLength: buffer.byteLength }
+  }
+  return {
+    content: buffer.subarray(0, MOBILE_FILE_READ_MAX_BYTES).toString('utf8'),
+    truncated: true,
+    byteLength: buffer.byteLength
+  }
 }
 
 function compareWorktreePs(

@@ -87,6 +87,7 @@ type MobileSessionTab =
       title: string
       filePath: string
       relativePath: string
+      language?: string
       isDirty: boolean
       isActive: boolean
     }
@@ -113,6 +114,11 @@ type MarkdownDocState =
       saveError?: string
       readOnlyReason?: string
     }
+  | { status: 'error'; message: string }
+
+type FileDocState =
+  | { status: 'loading' }
+  | { status: 'ready'; content: string; truncated: boolean; byteLength: number }
   | { status: 'error'; message: string }
 
 type DirtyMarkdownDraft = {
@@ -332,6 +338,67 @@ function MarkdownReader({
   )
 }
 
+function FileReader({
+  doc,
+  title,
+  onRefresh,
+  onCopy
+}: {
+  doc: FileDocState | undefined
+  title: string
+  onRefresh: () => void
+  onCopy: () => void
+}) {
+  if (!doc || doc.status === 'loading') {
+    return (
+      <View style={styles.markdownState}>
+        <ActivityIndicator size="small" color={colors.textSecondary} />
+      </View>
+    )
+  }
+  if (doc.status === 'error') {
+    return (
+      <View style={styles.markdownState}>
+        <Text style={styles.markdownError}>{doc.message}</Text>
+        <Pressable style={styles.markdownRefreshButton} onPress={onRefresh}>
+          <RefreshCw size={14} color={colors.textPrimary} />
+          <Text style={styles.markdownRefreshText}>Retry</Text>
+        </Pressable>
+      </View>
+    )
+  }
+
+  return (
+    <View style={styles.markdownEditor}>
+      <TextInput
+        style={styles.markdownTextInput}
+        value={doc.content}
+        editable={false}
+        multiline
+        textAlignVertical="top"
+        autoCapitalize="none"
+        autoCorrect={false}
+        spellCheck={false}
+        accessibilityLabel={`${title} preview`}
+      />
+      <View pointerEvents="box-none" style={styles.markdownFloatingBar}>
+        <Text style={styles.markdownFloatingStatus} numberOfLines={2}>
+          {doc.truncated ? 'Read-only preview, truncated' : 'Read-only preview'}
+        </Text>
+        <View style={styles.markdownFloatingActions}>
+          <Pressable style={styles.markdownFloatingButton} onPress={onCopy}>
+            <Text style={styles.markdownFloatingButtonText}>Copy</Text>
+          </Pressable>
+          <Pressable style={styles.markdownFloatingButton} onPress={onRefresh}>
+            <RefreshCw size={13} color={colors.textPrimary} />
+            <Text style={styles.markdownFloatingButtonText}>Refresh</Text>
+          </Pressable>
+        </View>
+      </View>
+    </View>
+  )
+}
+
 export default function SessionScreen() {
   const {
     hostId,
@@ -356,6 +423,7 @@ export default function SessionScreen() {
   const [activeHandle, setActiveHandle] = useState<string | null>(null)
   const [activeSessionTabId, setActiveSessionTabId] = useState<string | null>(null)
   const [markdownDocs, setMarkdownDocs] = useState<Map<string, MarkdownDocState>>(new Map())
+  const [fileDocs, setFileDocs] = useState<Map<string, FileDocState>>(new Map())
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState('')
   const [actionTarget, setActionTarget] = useState<Terminal | null>(null)
@@ -428,7 +496,7 @@ export default function SessionScreen() {
 
   const activeSessionTab = sessionTabs.find((tab) => tab.id === activeSessionTabId) ?? null
   const canSend =
-    connState === 'connected' && activeHandle != null && activeSessionTab?.type !== 'markdown'
+    connState === 'connected' && activeHandle != null && activeSessionTab?.type === 'terminal'
 
   const showToast = useCallback((message: string, durationMs = 1200) => {
     setToastMessage(message)
@@ -806,7 +874,7 @@ export default function SessionScreen() {
           setTerminals(deduped)
           setTerminalsLoaded(true)
 
-          if (activeSessionTabTypeRef.current === 'markdown') {
+          if (activeSessionTabTypeRef.current !== 'terminal') {
             return
           }
 
@@ -951,6 +1019,61 @@ export default function SessionScreen() {
       }
     },
     [client, worktreeId]
+  )
+
+  const readFileTab = useCallback(
+    async (tab: Extract<MobileSessionTab, { type: 'file' }>) => {
+      if (!client) return
+      setFileDocs((prev) => new Map(prev).set(tab.id, { status: 'loading' }))
+      try {
+        const response = await client.sendRequest('files.read', {
+          worktree: `id:${worktreeId}`,
+          relativePath: tab.relativePath
+        })
+        if (!response.ok) {
+          throw new Error((response as RpcFailure).error.message)
+        }
+        const result = (response as RpcSuccess).result as {
+          content: string
+          truncated: boolean
+          byteLength: number
+        }
+        setFileDocs((prev) =>
+          new Map(prev).set(tab.id, {
+            status: 'ready',
+            content: result.content,
+            truncated: result.truncated,
+            byteLength: result.byteLength
+          })
+        )
+      } catch (err) {
+        const message = err instanceof Error ? err.message : ''
+        const previewMessage =
+          message === 'binary_file'
+            ? 'Binary preview unavailable'
+            : message === 'file_too_large'
+              ? 'File too large for mobile preview'
+              : "Couldn't load file preview"
+        setFileDocs((prev) =>
+          new Map(prev).set(tab.id, {
+            status: 'error',
+            message: previewMessage
+          })
+        )
+      }
+    },
+    [client, worktreeId]
+  )
+
+  const copyFileContent = useCallback(
+    async (tabId: string) => {
+      const current = fileDocs.get(tabId)
+      if (current?.status !== 'ready') return
+      await Clipboard.setStringAsync(current.content)
+      triggerSuccess()
+      showToast('Copied')
+    },
+    [fileDocs, showToast]
   )
 
   const updateMarkdownLocalContent = useCallback((tabId: string, content: string) => {
@@ -1366,6 +1489,7 @@ export default function SessionScreen() {
   // so the desktop renderer follows the mobile user's active terminal.
   const switchTab = useCallback(
     (handle: string) => {
+      triggerSelection()
       const matchingTab = sessionTabs.find(
         (tab): tab is Extract<MobileSessionTab, { type: 'terminal' }> =>
           tab.type === 'terminal' && tab.terminal === handle
@@ -1428,6 +1552,7 @@ export default function SessionScreen() {
           .catch(() => {})
       }
       if (tab.type === 'file') {
+        void readFileTab(tab)
         return
       }
       const cached = markdownDocs.get(tab.id)
@@ -1438,7 +1563,7 @@ export default function SessionScreen() {
       // lightweight tab list. Re-read on revisit unless the phone has a draft.
       void readMarkdownTab(tab)
     },
-    [client, markdownDocs, readMarkdownTab, switchTab, unsubscribeTerminal, worktreeId]
+    [client, markdownDocs, readFileTab, readMarkdownTab, switchTab, unsubscribeTerminal, worktreeId]
   )
 
   // Why: just store the ref. Subscription is deferred to handleTerminalWebReady
@@ -1498,6 +1623,14 @@ export default function SessionScreen() {
       void readMarkdownTab(activeSessionTab)
     }
   }, [activeSessionTab, markdownDocs, readMarkdownTab])
+
+  useEffect(() => {
+    if (activeSessionTab?.type !== 'file') return
+    const doc = fileDocs.get(activeSessionTab.id)
+    if (!doc || doc.status === 'error') {
+      void readFileTab(activeSessionTab)
+    }
+  }, [activeSessionTab, fileDocs, readFileTab])
 
   async function handleSend() {
     if (!client || !activeHandle || sendingRef.current) return
@@ -2042,14 +2175,21 @@ export default function SessionScreen() {
             )}
           </View>
         ) : activeFileTab ? (
-          <View style={styles.fileTabFrame}>
-            <File size={28} color={colors.textSecondary} strokeWidth={1.8} />
-            <Text style={styles.fileTabTitle} numberOfLines={1}>
-              {activeFileTab.title || 'File'}
-            </Text>
-            <Text style={styles.fileTabMeta} numberOfLines={2}>
-              Opened on desktop
-            </Text>
+          <View style={styles.markdownFrame}>
+            <FileReader
+              doc={fileDocs.get(activeFileTab.id)}
+              title={activeFileTab.title || 'File'}
+              onRefresh={() => void readFileTab(activeFileTab)}
+              onCopy={() => void copyFileContent(activeFileTab.id)}
+            />
+            {toastMessage && (
+              <Animated.View
+                pointerEvents="none"
+                style={[styles.toast, { opacity: toastOpacityRef.current }]}
+              >
+                <Text style={styles.toastText}>{toastMessage}</Text>
+              </Animated.View>
+            )}
           </View>
         ) : (
           <View

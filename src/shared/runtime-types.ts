@@ -161,6 +161,14 @@ export type RuntimeFileOpenResult = {
   opened: boolean
 }
 
+export type RuntimeFileReadResult = {
+  worktree: string
+  relativePath: string
+  content: string
+  truncated: boolean
+  byteLength: number
+}
+
 export type RuntimeTerminalSummary = {
   handle: string
   worktreeId: string

@@ -26,5 +26,11 @@ export const FILE_METHODS: RpcMethod[] = [
     params: FileOpen,
     handler: async (params, { runtime }) =>
       runtime.openMobileFile(params.worktree, params.relativePath)
+  }),
+  defineMethod({
+    name: 'files.read',
+    params: FileOpen,
+    handler: async (params, { runtime }) =>
+      runtime.readMobileFile(params.worktree, params.relativePath)
   })
 ]
