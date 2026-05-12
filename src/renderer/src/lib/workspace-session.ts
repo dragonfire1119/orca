@@ -8,7 +8,7 @@ import type {
 import type { AppState } from '../store'
 import type { OpenFile } from '../store/slices/editor'
 
-type WorkspaceSessionSnapshot = Pick<
+export type WorkspaceSessionSnapshot = Pick<
   AppState,
   | 'activeRepoId'
   | 'activeWorktreeId'
@@ -32,6 +32,43 @@ type WorkspaceSessionSnapshot = Pick<
   | 'worktreesByRepo'
   | 'lastKnownRelayPtyIdByTabId'
 >
+
+// Why: the App-level Zustand subscriber that debounces session writes uses
+// this list as a shallow-equality gate so it only resets the timer when a
+// field that actually feeds buildWorkspaceSessionPayload changes. Keeping
+// the list co-located with WorkspaceSessionSnapshot means a future field
+// added to the snapshot type fails the _exhaustive check below at compile
+// time, preventing the gate from silently going stale.
+export const SESSION_RELEVANT_FIELDS = [
+  'activeRepoId',
+  'activeWorktreeId',
+  'activeTabId',
+  'tabsByWorktree',
+  'terminalLayoutsByTabId',
+  'activeTabIdByWorktree',
+  'openFiles',
+  'activeFileIdByWorktree',
+  'activeTabTypeByWorktree',
+  'browserTabsByWorktree',
+  'browserPagesByWorkspace',
+  'activeBrowserTabIdByWorktree',
+  'browserUrlHistory',
+  'unifiedTabsByWorktree',
+  'groupsByWorktree',
+  'layoutByWorktree',
+  'activeGroupIdByWorktree',
+  'sshConnectionStates',
+  'repos',
+  'worktreesByRepo',
+  'lastKnownRelayPtyIdByTabId'
+] as const satisfies readonly (keyof WorkspaceSessionSnapshot)[]
+
+type _MissingSessionField = Exclude<
+  keyof WorkspaceSessionSnapshot,
+  (typeof SESSION_RELEVANT_FIELDS)[number]
+>
+const _exhaustive: [_MissingSessionField] extends [never] ? true : never = true
+void _exhaustive
 
 /** Build the editor-file portion of the workspace session for persistence.
  *  Only edit-mode files are saved — diffs and conflict views are transient. */
