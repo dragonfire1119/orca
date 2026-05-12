@@ -9,6 +9,7 @@ import {
   Bell,
   GitMerge,
   LoaderCircle,
+  PauseCircle,
   CircleCheck,
   CircleX,
   Server,
@@ -64,7 +65,6 @@ const WorktreeCard = React.memo(function WorktreeCard({
 }: WorktreeCardProps) {
   const openModal = useAppStore((s) => s.openModal)
   const updateWorktreeMeta = useAppStore((s) => s.updateWorktreeMeta)
-  const enqueueGitHubPRRefresh = useAppStore((s) => s.enqueueGitHubPRRefresh)
   const fetchIssue = useAppStore((s) => s.fetchIssue)
   const cardProps = useAppStore((s) => s.worktreeCardProperties)
   const handleEditIssue = useCallback(
@@ -278,32 +278,7 @@ const WorktreeCard = React.memo(function WorktreeCard({
     ]
   )
 
-  const showPR = cardProps.includes('pr')
-  const showCI = cardProps.includes('ci')
   const showIssue = cardProps.includes('issue')
-
-  // Skip GitHub fetches when the corresponding card sections are hidden.
-  // This preference is purely presentational, so background refreshes would
-  // spend rate limit budget on data the user cannot see.
-  useEffect(() => {
-    if (repo && !isFolder && !worktree.isBare && prCacheKey && isActive && (showPR || showCI)) {
-      // Why: pass linkedPR so worktrees created from a PR (whose new local
-      // branch differs from the PR's head ref) still resolve their PR via
-      // a number-based fallback in the main process.
-      enqueueGitHubPRRefresh(worktree.id, 'active', 80)
-    }
-  }, [
-    repo,
-    isFolder,
-    worktree.isBare,
-    worktree.id,
-    worktree.linkedPR,
-    enqueueGitHubPRRefresh,
-    isActive,
-    prCacheKey,
-    showPR,
-    showCI
-  ])
 
   // Same rationale for issues: once that section is hidden, polling only burns
   // GitHub calls and keeps stale-but-invisible data warm for no user benefit.
@@ -530,19 +505,34 @@ const WorktreeCard = React.memo(function WorktreeCard({
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span className="inline-flex items-center opacity-80 hover:opacity-100 transition-opacity">
-                    {pr.checksStatus === 'success' && (
-                      <CircleCheck className="size-3.5 text-emerald-500" />
+                    {prRefreshState?.status === 'in-flight' && (
+                      <LoaderCircle className="size-3.5 text-muted-foreground animate-spin" />
                     )}
-                    {pr.checksStatus === 'failure' && (
-                      <CircleX className="size-3.5 text-rose-500" />
+                    {prRefreshState?.status === 'paused' && (
+                      <PauseCircle className="size-3.5 text-muted-foreground" />
                     )}
-                    {pr.checksStatus === 'pending' && (
-                      <LoaderCircle className="size-3.5 text-amber-500 animate-spin" />
-                    )}
+                    {!['in-flight', 'paused'].includes(prRefreshState?.status ?? '') &&
+                      pr.checksStatus === 'success' && (
+                        <CircleCheck className="size-3.5 text-emerald-500" />
+                      )}
+                    {!['in-flight', 'paused'].includes(prRefreshState?.status ?? '') &&
+                      pr.checksStatus === 'failure' && (
+                        <CircleX className="size-3.5 text-rose-500" />
+                      )}
+                    {!['in-flight', 'paused'].includes(prRefreshState?.status ?? '') &&
+                      pr.checksStatus === 'pending' && (
+                        <LoaderCircle className="size-3.5 text-amber-500 animate-spin" />
+                      )}
                   </span>
                 </TooltipTrigger>
                 <TooltipContent side="right" sideOffset={8}>
-                  <span>CI checks {checksLabel(pr.checksStatus).toLowerCase()}</span>
+                  <span>
+                    {prRefreshState?.status === 'in-flight'
+                      ? 'Refreshing CI checks'
+                      : prRefreshState?.status === 'paused'
+                        ? 'CI refresh paused'
+                        : `CI checks ${checksLabel(pr.checksStatus).toLowerCase()}`}
+                  </span>
                 </TooltipContent>
               </Tooltip>
             </div>
