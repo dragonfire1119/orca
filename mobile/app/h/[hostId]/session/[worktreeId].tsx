@@ -132,26 +132,57 @@ function mergeTerminalFallbackTabs(
   terminals: Terminal[],
   activeHandle: string | null
 ): MobileSessionTab[] {
+  const terminalTabs = tabs.filter(
+    (tab): tab is Extract<MobileSessionTab, { type: 'terminal' }> => tab.type === 'terminal'
+  )
   if (terminals.length === 0) {
     return tabs
   }
-  const handles = new Set(
-    tabs
-      .filter(
-        (tab): tab is Extract<MobileSessionTab, { type: 'terminal' }> => tab.type === 'terminal'
-      )
-      .map((tab) => tab.terminal)
+  const terminalTabsByHandle = new Map(terminalTabs.map((tab) => [tab.terminal, tab]))
+  const terminalHandles = new Set(terminals.map((terminal) => terminal.handle))
+  const orderedTerminalTabs = terminals.map(
+    (terminal) =>
+      terminalTabsByHandle.get(terminal.handle) ?? {
+        type: 'terminal' as const,
+        id: terminal.handle,
+        title: terminal.title,
+        terminal: terminal.handle,
+        isActive: terminal.handle === activeHandle
+      }
   )
-  const fallbackTabs = terminals
-    .filter((terminal) => !handles.has(terminal.handle))
-    .map((terminal) => ({
-      type: 'terminal' as const,
-      id: terminal.handle,
-      title: terminal.title,
-      terminal: terminal.handle,
-      isActive: terminal.handle === activeHandle
-    }))
-  return fallbackTabs.length > 0 ? [...tabs, ...fallbackTabs] : tabs
+  const sessionOnlyTerminalTabs = terminalTabs.filter((tab) => !terminalHandles.has(tab.terminal))
+  const nonTerminalTabs = tabs.filter((tab) => tab.type !== 'terminal')
+  return [...orderedTerminalTabs, ...sessionOnlyTerminalTabs, ...nonTerminalTabs]
+}
+
+function mergeTerminalRecordsByCurrentOrder(
+  terminalTabs: Terminal[],
+  currentTerminals: Terminal[]
+): Terminal[] {
+  if (currentTerminals.length === 0) {
+    return terminalTabs
+  }
+  const terminalTabsByHandle = new Map(terminalTabs.map((tab) => [tab.handle, tab]))
+  const currentHandles = new Set(currentTerminals.map((terminal) => terminal.handle))
+  return [
+    ...currentTerminals.map((terminal) => terminalTabsByHandle.get(terminal.handle) ?? terminal),
+    ...terminalTabs.filter((terminal) => !currentHandles.has(terminal.handle))
+  ]
+}
+
+function getActiveTabIdForHandle(
+  tabs: MobileSessionTab[],
+  terminalHandle: string | null
+): string | null {
+  if (!terminalHandle) {
+    return null
+  }
+  return (
+    tabs.find(
+      (tab): tab is Extract<MobileSessionTab, { type: 'terminal' }> =>
+        tab.type === 'terminal' && tab.terminal === terminalHandle
+    )?.id ?? terminalHandle
+  )
 }
 
 type TerminalCreateResult = {
@@ -937,9 +968,10 @@ export default function SessionScreen() {
           title: tab.title || 'Terminal',
           isActive: tab.isActive
         }))
-      const handles = new Set(terminalTabs.map((tab) => tab.handle))
-      const fallbacks = terminalsRef.current.filter((terminal) => !handles.has(terminal.handle))
-      const mergedTerminalsForActive = [...terminalTabs, ...fallbacks]
+      const mergedTerminalsForActive = mergeTerminalRecordsByCurrentOrder(
+        terminalTabs,
+        terminalsRef.current
+      )
       setTerminals(mergedTerminalsForActive)
       terminalsRef.current = mergedTerminalsForActive
       lastKnownTerminalCountRef.current = Math.max(
@@ -987,7 +1019,7 @@ export default function SessionScreen() {
           // stable session tab id during new-worktree startup.
           active = pendingTerminalTab
         } else if (pendingTerminalExists) {
-          setActiveSessionTabId(pendingActiveTerminalHandle)
+          setActiveSessionTabId(getActiveTabIdForHandle(nextTabs, pendingActiveTerminalHandle))
           activeSessionTabTypeRef.current = 'terminal'
           setActiveHandle(pendingActiveTerminalHandle)
           subscribeToTerminal(pendingActiveTerminalHandle)
@@ -1006,7 +1038,7 @@ export default function SessionScreen() {
         // Why: the renderer session snapshot can be partial while a new
         // worktree is still creating its setup/agent terminals. Keep the
         // terminal.list-backed active PTY visible until the snapshot catches up.
-        setActiveSessionTabId(currentHandle)
+        setActiveSessionTabId(getActiveTabIdForHandle(nextTabs, currentHandle))
         setActiveHandle(currentHandle)
         subscribeToTerminal(currentHandle)
         return
