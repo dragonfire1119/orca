@@ -37,7 +37,8 @@ export function syncPRChecksStatus(
   state: AppState,
   repoPath: string,
   branch: string | undefined,
-  checks: PRCheckDetail[]
+  checks: PRCheckDetail[],
+  headSha?: string
 ): Partial<AppState> | null {
   const normalized = branch ? normalizeBranchName(branch) : ''
   if (!normalized) {
@@ -47,6 +48,9 @@ export function syncPRChecksStatus(
   const prCacheKey = `${repoPath}::${normalized}`
   const prEntry = state.prCache[prCacheKey]
   if (!prEntry?.data) {
+    return null
+  }
+  if (headSha && prEntry.data.headSha && prEntry.data.headSha !== headSha) {
     return null
   }
 

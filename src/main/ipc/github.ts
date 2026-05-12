@@ -4,7 +4,13 @@ reviewable as one surface. Splitting by feature area would risk drifting
 validation/gate conventions across handler files. */
 import { ipcMain, webContents } from 'electron'
 import { resolve } from 'path'
-import type { Repo, GitHubIssueUpdate } from '../../shared/types'
+import type {
+  Repo,
+  GitHubIssueUpdate,
+  GitHubPRRefreshCandidate,
+  GitHubPRRefreshReason,
+  PRRefreshOutcome
+} from '../../shared/types'
 import type { Store } from '../persistence'
 import type { StatsCollector } from '../stats/collector'
 import {
@@ -32,6 +38,11 @@ import {
   checkOrcaStarred,
   starOrca
 } from '../github/client'
+import {
+  enqueuePRRefresh,
+  refreshPRNow,
+  reportVisiblePRRefreshCandidates
+} from '../github/pr-refresh-coordinator'
 import { getWorkItemDetails, getPRFileContents } from '../github/work-item-details'
 import { getRateLimit } from '../github/rate-limit'
 import { diagnoseGhAuth } from '../github/auth-diagnose'
@@ -110,6 +121,17 @@ function assertRegisteredRepo(repoPath: string, store: Store): Repo {
 }
 
 export function registerGitHubHandlers(store: Store, stats: StatsCollector): void {
+  function recordPRIfNeeded(repo: Repo, outcome: PRRefreshOutcome): void {
+    if (outcome.kind === 'found' && !stats.hasCountedPR(outcome.pr.url)) {
+      stats.record({
+        type: 'pr_created',
+        at: Date.now(),
+        repoId: repo.id,
+        meta: { prNumber: outcome.pr.number, prUrl: outcome.pr.url }
+      })
+    }
+  }
+
   ipcMain.handle(
     'gh:prForBranch',
     async (_event, args: { repoPath: string; branch: string; linkedPRNumber?: number | null }) => {
@@ -127,6 +149,44 @@ export function registerGitHubHandlers(store: Store, stats: StatsCollector): voi
         })
       }
       return pr
+    }
+  )
+
+  ipcMain.handle(
+    'gh:refreshPRNow',
+    async (_event, args: { candidate: GitHubPRRefreshCandidate }) => {
+      const repo = assertRegisteredRepo(args.candidate.repoPath, store)
+      const outcome = await refreshPRNow({ ...args.candidate, repoPath: repo.path })
+      recordPRIfNeeded(repo, outcome)
+      return outcome
+    }
+  )
+
+  ipcMain.handle(
+    'gh:enqueuePRRefresh',
+    (
+      _event,
+      args: {
+        candidate: GitHubPRRefreshCandidate
+        reason: GitHubPRRefreshReason
+        priority?: number
+      }
+    ) => {
+      const repo = assertRegisteredRepo(args.candidate.repoPath, store)
+      enqueuePRRefresh({ ...args.candidate, repoPath: repo.path }, args.reason, args.priority ?? 0)
+      return true
+    }
+  )
+
+  ipcMain.handle(
+    'gh:reportVisiblePRRefreshCandidates',
+    (event, args: { candidates: GitHubPRRefreshCandidate[]; generation: number }) => {
+      const candidates = args.candidates.map((candidate) => {
+        const repo = assertRegisteredRepo(candidate.repoPath, store)
+        return { ...candidate, repoPath: repo.path }
+      })
+      reportVisiblePRRefreshCandidates(candidates, args.generation, event.sender.id)
+      return true
     }
   )
 

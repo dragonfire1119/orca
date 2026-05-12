@@ -67,6 +67,7 @@ const WorktreeCard = React.memo(function WorktreeCard({
   const updateWorktreeMeta = useAppStore((s) => s.updateWorktreeMeta)
   const fetchHostedReviewForBranch = useAppStore((s) => s.fetchHostedReviewForBranch)
   const settings = useAppStore((s) => s.settings)
+  const enqueueGitHubPRRefresh = useAppStore((s) => s.enqueueGitHubPRRefresh)
   const fetchIssue = useAppStore((s) => s.fetchIssue)
   const cardProps = useAppStore((s) => s.worktreeCardProperties)
   const handleEditIssue = useCallback(
@@ -201,15 +202,31 @@ const WorktreeCard = React.memo(function WorktreeCard({
         linkedGitLabMR: worktree.linkedGitLabMR ?? null
       })
     }
+
+    if (
+      repo &&
+      !isFolder &&
+      !worktree.isBare &&
+      hostedReviewCacheKey &&
+      isActive &&
+      (showPR || showCI)
+    ) {
+      // Why: explicit active-card freshness should enter the rate-limited
+      // GitHub queue instead of bypassing it with another direct gh call.
+      enqueueGitHubPRRefresh(worktree.id, 'active', 80)
+    }
   }, [
     repo,
     isFolder,
     worktree.isBare,
+    worktree.id,
     worktree.linkedPR,
     worktree.linkedGitLabMR,
     fetchHostedReviewForBranch,
     branch,
     hostedReviewCacheKey,
+    enqueueGitHubPRRefresh,
+    isActive,
     showPR,
     showCI
   ])
