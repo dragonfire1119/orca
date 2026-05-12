@@ -4131,10 +4131,11 @@ export class OrcaRuntimeService {
     worktreeSelector?: string,
     opts: { command?: string; env?: Record<string, string>; title?: string; focus?: boolean } = {}
   ): Promise<RuntimeTerminalCreate> {
-    if (opts.focus !== true) {
-      if (!worktreeSelector) {
-        throw new Error('MISSING_WORKTREE')
-      }
+    // Why: pre-diff createTerminal fell back to the renderer's active worktree
+    // when no selector was provided. The new background-spawn branch hard-
+    // requires a resolvable selector, so route the no-selector case through
+    // the renderer IPC path to preserve that behavior.
+    if (opts.focus !== true && worktreeSelector) {
       if (!this.ptyController?.spawn) {
         throw new Error('runtime_unavailable')
       }

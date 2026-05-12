@@ -234,23 +234,31 @@ export function useIpcEvents(): void {
               // logic; see docs/cmd-j-empty-query-ordering.md.
               store.markWorktreeVisited(worktreeId)
             }
-            const tab = ptyId
-              ? ((store.tabsByWorktree[worktreeId] ?? []).find(
+            const existingTab = ptyId
+              ? (store.tabsByWorktree[worktreeId] ?? []).find(
                   (candidate) =>
                     candidate.ptyId === ptyId ||
                     (store.ptyIdsByTabId[candidate.id] ?? []).includes(ptyId)
-                ) ??
-                store.createTab(worktreeId, undefined, undefined, {
-                  initialPtyId: ptyId,
-                  activate: shouldActivate
-                }))
-              : store.createTab(worktreeId)
+                )
+              : undefined
+            const tab =
+              existingTab ??
+              (ptyId
+                ? store.createTab(worktreeId, undefined, undefined, {
+                    initialPtyId: ptyId,
+                    activate: shouldActivate
+                  })
+                : store.createTab(worktreeId))
             if (shouldActivate) {
               store.setActiveTabType('terminal')
               store.setActiveTab(tab.id)
               store.revealWorktreeInSidebar(worktreeId)
             }
-            if (title) {
+            // Why: only stamp the runtime-supplied title on freshly created tabs.
+            // Existing tabs may have a user customTitle (set via UI rename) that
+            // the runtime's stored title would otherwise silently overwrite on
+            // every focus.
+            if (title && !existingTab) {
               store.setTabCustomTitle(tab.id, title)
             }
             if (command) {
