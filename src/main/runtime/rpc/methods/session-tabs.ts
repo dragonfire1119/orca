@@ -39,23 +39,31 @@ export const SESSION_TAB_METHODS: RpcAnyMethod[] = [
     name: 'session.tabs.subscribe',
     params: WorktreeTabSelector,
     handler: async (params, { runtime, connectionId }, emit) => {
-      const initial = await runtime.listMobileSessionTabs(params.worktree)
-      emit({ type: 'snapshot', ...initial })
-
-      const unsubscribe = runtime.onMobileSessionTabsChanged((snapshot) => {
-        if (snapshot.worktree === initial.worktree) {
-          emit({ type: 'updated', ...snapshot })
-        }
-      })
-      const subscriptionId = `session.tabs:${connectionId ?? 'local'}:${initial.worktree}`
+      let subscribedWorktree: string | null = null
+      let unsubscribe = (): void => {}
+      let closed = false
+      const subscriptionId = `session.tabs:${connectionId ?? 'local'}:${params.worktree}`
       runtime.registerSubscriptionCleanup(
         subscriptionId,
         () => {
+          closed = true
           unsubscribe()
           emit({ type: 'end' })
         },
         connectionId
       )
+      const initial = await runtime.listMobileSessionTabs(params.worktree)
+      if (closed) {
+        return
+      }
+      subscribedWorktree = initial.worktree
+      emit({ type: 'snapshot', ...initial })
+
+      unsubscribe = runtime.onMobileSessionTabsChanged((snapshot) => {
+        if (snapshot.worktree === subscribedWorktree) {
+          emit({ type: 'updated', ...snapshot })
+        }
+      })
     }
   }),
   defineMethod({
@@ -63,6 +71,7 @@ export const SESSION_TAB_METHODS: RpcAnyMethod[] = [
     params: WorktreeTabSelector,
     handler: async (params, { runtime, connectionId }) => {
       const snapshot = await runtime.listMobileSessionTabs(params.worktree)
+      runtime.cleanupSubscription(`session.tabs:${connectionId ?? 'local'}:${params.worktree}`)
       runtime.cleanupSubscription(`session.tabs:${connectionId ?? 'local'}:${snapshot.worktree}`)
       return { unsubscribed: true }
     }

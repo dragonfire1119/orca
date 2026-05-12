@@ -122,6 +122,7 @@ import {
 } from '../git/repo'
 import { listWorktrees, addWorktree, removeWorktree } from '../git/worktree'
 import { listQuickOpenFiles } from '../ipc/filesystem-list-files'
+import { resolveAuthorizedPath } from '../ipc/filesystem-auth'
 import {
   createSetupRunnerScript,
   getEffectiveHooks,
@@ -1001,7 +1002,7 @@ export class OrcaRuntimeService {
     const filePath = joinWorktreeRelativePath(worktree.path, relativePath)
     const content = repo?.connectionId
       ? await this.readRemoteMobileFile(filePath, repo.connectionId)
-      : await readLocalMobileFile(filePath)
+      : await readLocalMobileFile(filePath, this.store as unknown as Store)
     const truncated = truncateMobileFilePreview(content)
 
     return {
@@ -7147,12 +7148,13 @@ function joinWorktreeRelativePath(rootPath: string, relativePath: string): strin
   return posix.join(rootPath, ...normalizedRelativePath.split('/'))
 }
 
-async function readLocalMobileFile(filePath: string): Promise<string> {
-  const fileStat = await stat(filePath)
+async function readLocalMobileFile(filePath: string, store: Store): Promise<string> {
+  const authorizedPath = await resolveAuthorizedPath(filePath, store)
+  const fileStat = await stat(authorizedPath)
   // Why: mobile file previews are read-only convenience views; cap the read so
   // opening a generated log or bundle cannot block the WebSocket like oversized scrollback.
   const readLimit = Math.min(fileStat.size, MOBILE_FILE_READ_MAX_BYTES + 1)
-  const handle = await open(filePath, 'r')
+  const handle = await open(authorizedPath, 'r')
   try {
     const buffer = Buffer.alloc(readLimit)
     const { bytesRead } = await handle.read(buffer, 0, readLimit, 0)

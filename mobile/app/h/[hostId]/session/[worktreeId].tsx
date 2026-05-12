@@ -1581,7 +1581,7 @@ export default function SessionScreen() {
   useEffect(() => {
     if (activeSessionTab?.type !== 'markdown') return
     const doc = markdownDocs.get(activeSessionTab.id)
-    if (!doc || doc.status === 'error') {
+    if (!doc) {
       void readMarkdownTab(activeSessionTab)
     }
   }, [activeSessionTab, markdownDocs, readMarkdownTab])
@@ -1589,7 +1589,7 @@ export default function SessionScreen() {
   useEffect(() => {
     if (activeSessionTab?.type !== 'file') return
     const doc = fileDocs.get(activeSessionTab.id)
-    if (!doc || doc.status === 'error') {
+    if (!doc) {
       void readFileTab(activeSessionTab)
     }
   }, [activeSessionTab, fileDocs, readFileTab])
@@ -2456,8 +2456,15 @@ export default function SessionScreen() {
               const combined = drafts
                 .map((draft) => `# ${draft.title}\n\n${draft.content}`)
                 .join('\n\n---\n\n')
-              setLeaveDrafts(null)
-              void Clipboard.setStringAsync(combined).finally(() => router.back())
+              void Clipboard.setStringAsync(combined)
+                .then(() => {
+                  setLeaveDrafts(null)
+                  router.back()
+                })
+                .catch(() => {
+                  triggerError()
+                  showToast("Couldn't copy drafts", 1500)
+                })
             }
           },
           {

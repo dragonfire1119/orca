@@ -174,10 +174,7 @@ export default function MobileFileExplorerScreen() {
           throw new Error(response.error?.message || 'Unable to open file')
         }
         triggerSelection()
-        router.replace({
-          pathname: '/h/[hostId]/session/[worktreeId]',
-          params: { hostId, worktreeId, name: name ?? '' }
-        })
+        router.back()
       } catch (err) {
         triggerError()
         setError(err instanceof Error ? err.message : 'Unable to open file')

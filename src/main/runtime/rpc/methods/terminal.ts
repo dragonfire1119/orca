@@ -561,6 +561,31 @@ export const TERMINAL_METHODS: RpcAnyMethod[] = [
       let closed = false
       let buffering = true
       const pendingOutput: string[] = []
+      let unsubscribeData = (): void => {}
+      let unsubscribeResize = (): void => {}
+      let unsubscribeFit = (): void => {}
+      let resolveStream = (): void => {}
+      const streamClosed = new Promise<void>((resolve) => {
+        resolveStream = resolve
+      })
+      // Why: register cleanup before any mobile-fit or snapshot await. A phone
+      // can disconnect mid-subscribe; cleanup must still remove mobile presence.
+      const subscriptionId = clientId ? `${params.terminal}:${clientId}` : params.terminal
+      runtime.registerSubscriptionCleanup(
+        subscriptionId,
+        () => {
+          closed = true
+          unsubscribeData()
+          unsubscribeResize()
+          unsubscribeFit()
+          if (isMobile && clientId) {
+            runtime.handleMobileUnsubscribe(ptyId, clientId)
+          }
+          emit({ type: 'end' })
+          resolveStream()
+        },
+        connectionId
+      )
       const sendFrame = (
         opcode: TerminalStreamOpcode,
         payload: Uint8Array<ArrayBufferLike> = new Uint8Array()
@@ -571,80 +596,86 @@ export const TERMINAL_METHODS: RpcAnyMethod[] = [
         sendBinary(encodeTerminalStreamFrame({ opcode, streamId, seq: cursor++, payload }))
       }
       // Server-side auto-fit: resize PTY to phone dims before serializing scrollback
-      if (isMobile && clientId) {
-        await runtime.handleMobileSubscribe(ptyId, clientId, params.viewport)
-      }
-
-      const unsubscribeData = runtime.subscribeToTerminalData(ptyId, (data) => {
+      try {
+        if (isMobile && clientId) {
+          await runtime.handleMobileSubscribe(ptyId, clientId, params.viewport)
+        }
         if (closed) {
           return
         }
-        if (buffering) {
-          pendingOutput.push(data)
+
+        unsubscribeData = runtime.subscribeToTerminalData(ptyId, (data) => {
+          if (closed) {
+            return
+          }
+          if (buffering) {
+            pendingOutput.push(data)
+            return
+          }
+          sendBinary!(
+            encodeTerminalStreamFrame({
+              opcode: TerminalStreamOpcode.Output,
+              streamId,
+              seq: cursor++,
+              payload: encodeTerminalStreamText(data)
+            })
+          )
+        })
+
+        const read = await runtime.readTerminal(params.terminal)
+        const serialized = await serializeBudgetedMobileSnapshot(runtime, ptyId, true)
+        if (closed) {
           return
         }
-        sendBinary!(
-          encodeTerminalStreamFrame({
-            opcode: TerminalStreamOpcode.Output,
-            streamId,
-            seq: cursor++,
-            payload: encodeTerminalStreamText(data)
-          })
-        )
-      })
+        const size = runtime.getTerminalSize(ptyId)
+        const displayMode = runtime.getMobileDisplayMode(ptyId)
+        // Why: emit the current layout seq with the initial scrollback so
+        // the mobile client's stale-event filter knows the high-water mark.
+        // Undefined when the PTY has never transitioned (filter is fail-open).
+        // See docs/mobile-terminal-layout-state-machine.md.
+        const seq = runtime.getLayout(ptyId)?.seq
+        emit({
+          type: 'subscribed',
+          streamId,
+          lines: read.tail,
+          truncated: read.truncated,
+          cols: serialized?.cols ?? size?.cols,
+          rows: serialized?.rows ?? size?.rows,
+          displayMode,
+          seq
+        })
+        const snapshotStats = sendSnapshotFrames(sendFrame, {
+          kind: 'scrollback',
+          cols: serialized?.cols ?? size?.cols ?? 80,
+          rows: serialized?.rows ?? size?.rows ?? 24,
+          displayMode,
+          seq,
+          truncated: read.truncated,
+          truncatedByByteBudget: serialized?.truncatedByByteBudget,
+          data: serialized?.data ?? ''
+        })
+        console.log('[mobile-terminal-stream] snapshot', {
+          terminal: params.terminal,
+          streamId,
+          kind: 'scrollback',
+          bytes: snapshotStats.bytes,
+          chunks: snapshotStats.chunks,
+          scrollbackRows: serialized?.scrollbackRows,
+          truncatedByByteBudget: serialized?.truncatedByByteBudget === true
+        })
+        buffering = false
+        for (const item of pendingOutput.splice(0)) {
+          sendBinary!(
+            encodeTerminalStreamFrame({
+              opcode: TerminalStreamOpcode.Output,
+              streamId,
+              seq: cursor++,
+              payload: encodeTerminalStreamText(item)
+            })
+          )
+        }
 
-      const read = await runtime.readTerminal(params.terminal)
-      const serialized = await serializeBudgetedMobileSnapshot(runtime, ptyId, true)
-      const size = runtime.getTerminalSize(ptyId)
-      const displayMode = runtime.getMobileDisplayMode(ptyId)
-      // Why: emit the current layout seq with the initial scrollback so
-      // the mobile client's stale-event filter knows the high-water mark.
-      // Undefined when the PTY has never transitioned (filter is fail-open).
-      // See docs/mobile-terminal-layout-state-machine.md.
-      const seq = runtime.getLayout(ptyId)?.seq
-      emit({
-        type: 'subscribed',
-        streamId,
-        lines: read.tail,
-        truncated: read.truncated,
-        cols: serialized?.cols ?? size?.cols,
-        rows: serialized?.rows ?? size?.rows,
-        displayMode,
-        seq
-      })
-      const snapshotStats = sendSnapshotFrames(sendFrame, {
-        kind: 'scrollback',
-        cols: serialized?.cols ?? size?.cols ?? 80,
-        rows: serialized?.rows ?? size?.rows ?? 24,
-        displayMode,
-        seq,
-        truncated: read.truncated,
-        truncatedByByteBudget: serialized?.truncatedByByteBudget,
-        data: serialized?.data ?? ''
-      })
-      console.log('[mobile-terminal-stream] snapshot', {
-        terminal: params.terminal,
-        streamId,
-        kind: 'scrollback',
-        bytes: snapshotStats.bytes,
-        chunks: snapshotStats.chunks,
-        scrollbackRows: serialized?.scrollbackRows,
-        truncatedByByteBudget: serialized?.truncatedByByteBudget === true
-      })
-      buffering = false
-      for (const item of pendingOutput.splice(0)) {
-        sendBinary!(
-          encodeTerminalStreamFrame({
-            opcode: TerminalStreamOpcode.Output,
-            streamId,
-            seq: cursor++,
-            payload: encodeTerminalStreamText(item)
-          })
-        )
-      }
-
-      await new Promise<void>((resolve) => {
-        const unsubscribeResize = runtime.subscribeToTerminalResize(ptyId, (event) => {
+        unsubscribeResize = runtime.subscribeToTerminalResize(ptyId, (event) => {
           // Why: true PTY geometry changes should be followed by the TUI's
           // redraw output, not a full scrollback replay. The client resizes
           // xterm geometry and consumes subsequent live output on this stream.
@@ -661,7 +692,7 @@ export const TERMINAL_METHODS: RpcAnyMethod[] = [
         })
 
         // Legacy fit-override-changed for non-mobile (desktop) subscribers
-        const unsubscribeFit = !isMobile
+        unsubscribeFit = !isMobile
           ? runtime.subscribeToFitOverrideChanges(ptyId, (event) => {
               emit({
                 type: 'fit-override-changed',
@@ -671,28 +702,12 @@ export const TERMINAL_METHODS: RpcAnyMethod[] = [
               })
             })
           : () => {}
+      } catch (error) {
+        runtime.cleanupSubscription(subscriptionId)
+        throw error
+      }
 
-        // Why: composite subscriptionId per (terminal, clientId) so two
-        // mobile clients subscribing to the same terminal handle do not
-        // evict each other via registerSubscriptionCleanup's
-        // duplicate-key cleanup. See docs/mobile-presence-lock.md.
-        const subscriptionId = clientId ? `${params.terminal}:${clientId}` : params.terminal
-        runtime.registerSubscriptionCleanup(
-          subscriptionId,
-          () => {
-            closed = true
-            unsubscribeData()
-            unsubscribeResize()
-            unsubscribeFit()
-            if (isMobile && clientId) {
-              runtime.handleMobileUnsubscribe(ptyId, clientId)
-            }
-            emit({ type: 'end' })
-            resolve()
-          },
-          connectionId
-        )
-      })
+      await streamClosed
     }
   }),
   defineMethod({
