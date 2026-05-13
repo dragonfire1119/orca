@@ -100,6 +100,10 @@ export const DEFAULT_STATUS_BAR_ITEMS: StatusBarItem[] = [
  *  the collector and the status-bar popover agree on the sentinel. */
 export const ORPHAN_WORKTREE_ID = '__orphan__'
 
+// Why: the floating terminal is a local synthetic workspace, so persistence
+// pruning must classify it without consulting the repo catalog.
+export const FLOATING_TERMINAL_WORKTREE_ID = 'global-floating-terminal'
+
 export const REPO_COLORS = [
   '#737373', // neutral
   '#ef4444', // red

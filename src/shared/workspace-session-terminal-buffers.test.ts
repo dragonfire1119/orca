@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { FLOATING_TERMINAL_WORKTREE_ID } from './constants'
 import type { WorkspaceSessionState } from './types'
 import { pruneLocalTerminalScrollbackBuffers } from './workspace-session-terminal-buffers'
 
@@ -68,6 +69,44 @@ describe('pruneLocalTerminalScrollbackBuffers', () => {
     })
     expect(result.terminalLayoutsByTabId['remote-tab'].buffersByLeafId).toEqual({
       'pane:1': 'remote-scrollback'
+    })
+  })
+
+  it('drops floating terminal buffers even though the synthetic worktree has no repo', () => {
+    const result = pruneLocalTerminalScrollbackBuffers(
+      makeSession({
+        tabsByWorktree: {
+          [FLOATING_TERMINAL_WORKTREE_ID]: [
+            {
+              id: 'floating-tab',
+              title: 'floating',
+              customTitle: null,
+              color: null,
+              sortOrder: 0,
+              createdAt: 1,
+              ptyId: 'floating-pty',
+              worktreeId: FLOATING_TERMINAL_WORKTREE_ID
+            }
+          ]
+        },
+        terminalLayoutsByTabId: {
+          'floating-tab': {
+            root: null,
+            activeLeafId: null,
+            expandedLeafId: null,
+            buffersByLeafId: { 'pane:1': 'floating-scrollback' },
+            ptyIdsByLeafId: { 'pane:1': 'floating-pty' }
+          }
+        }
+      }),
+      []
+    )
+
+    expect(result.terminalLayoutsByTabId['floating-tab']).toEqual({
+      root: null,
+      activeLeafId: null,
+      expandedLeafId: null,
+      ptyIdsByLeafId: { 'pane:1': 'floating-pty' }
     })
   })
 

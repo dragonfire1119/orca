@@ -5,7 +5,7 @@ import {
   type WorkspaceSessionSnapshot
 } from './workspace-session'
 import type { AppState } from '../store'
-import { FLOATING_TERMINAL_WORKTREE_ID } from './floating-terminal'
+import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../shared/constants'
 
 function createSnapshot(overrides: Partial<AppState> = {}): AppState {
   return {
@@ -86,6 +86,17 @@ function createSnapshot(overrides: Partial<AppState> = {}): AppState {
   } as AppState
 }
 
+function createRepo(id: string, connectionId: string | null): AppState['repos'][number] {
+  return {
+    id,
+    path: `/${id}`,
+    displayName: id,
+    badgeColor: '#fff',
+    addedAt: 1,
+    connectionId
+  }
+}
+
 describe('buildWorkspaceSessionPayload', () => {
   it('preserves activeWorktreeIdsOnShutdown for full replacement writes', () => {
     const payload = buildWorkspaceSessionPayload(createSnapshot())
@@ -107,7 +118,13 @@ describe('buildWorkspaceSessionPayload', () => {
           ]
         },
         terminalLayoutsByTabId: {
-          'floating-tab-1': { root: null, activeLeafId: null, expandedLeafId: null }
+          'floating-tab-1': {
+            root: null,
+            activeLeafId: null,
+            expandedLeafId: null,
+            buffersByLeafId: { 'pane:1': 'floating-scrollback' },
+            ptyIdsByLeafId: { 'pane:1': 'floating-pty-1' }
+          }
         },
         activeTabIdByWorktree: {
           [FLOATING_TERMINAL_WORKTREE_ID]: 'floating-tab-1'
@@ -117,7 +134,10 @@ describe('buildWorkspaceSessionPayload', () => {
 
     expect(payload.tabsByWorktree[FLOATING_TERMINAL_WORKTREE_ID]).toHaveLength(1)
     expect(payload.activeTabIdByWorktree?.[FLOATING_TERMINAL_WORKTREE_ID]).toBe('floating-tab-1')
-    expect(payload.terminalLayoutsByTabId['floating-tab-1']).toBeDefined()
+    expect(payload.terminalLayoutsByTabId['floating-tab-1'].buffersByLeafId).toBeUndefined()
+    expect(payload.terminalLayoutsByTabId['floating-tab-1'].ptyIdsByLeafId).toEqual({
+      'pane:1': 'floating-pty-1'
+    })
     expect(payload.activeWorktreeIdsOnShutdown).toEqual([FLOATING_TERMINAL_WORKTREE_ID])
   })
 
@@ -139,10 +159,21 @@ describe('buildWorkspaceSessionPayload', () => {
   })
 
   it('drops local terminal scrollback buffers from session payloads', () => {
+    const localWorktreeId = 'repo-1::/local/worktree'
     const payload = buildWorkspaceSessionPayload(
       createSnapshot({
+        tabsByWorktree: {
+          [localWorktreeId]: [
+            {
+              id: 'tab-local',
+              title: 'shell',
+              ptyId: 'pty-1',
+              worktreeId: localWorktreeId
+            } as never
+          ]
+        },
         terminalLayoutsByTabId: {
-          'tab-1': {
+          'tab-local': {
             root: null,
             activeLeafId: null,
             expandedLeafId: null,
@@ -151,11 +182,11 @@ describe('buildWorkspaceSessionPayload', () => {
             titlesByLeafId: { 'pane:1': 'build' }
           }
         },
-        repos: [{ id: 'wt-1', connectionId: null } as never]
+        repos: [createRepo('repo-1', null)]
       })
     )
 
-    expect(payload.terminalLayoutsByTabId['tab-1']).toEqual({
+    expect(payload.terminalLayoutsByTabId['tab-local']).toEqual({
       root: null,
       activeLeafId: null,
       expandedLeafId: null,
@@ -187,7 +218,7 @@ describe('buildWorkspaceSessionPayload', () => {
             ptyIdsByLeafId: { 'pane:1': 'relay-pty-1' }
           }
         },
-        repos: [{ id: 'repo-ssh', connectionId: 'conn-1' } as never]
+        repos: [createRepo('repo-ssh', 'conn-1')]
       })
     )
 
@@ -204,7 +235,7 @@ describe('buildWorkspaceSessionPayload', () => {
           'wt-ssh': [{ id: 'tab-ssh', title: 'remote', ptyId: null, worktreeId: 'wt-ssh' } as never]
         },
         lastKnownRelayPtyIdByTabId: { 'tab-ssh': 'relay-sess-42' },
-        repos: [{ id: 'repo-ssh', connectionId: 'conn-1' } as never],
+        repos: [createRepo('repo-ssh', 'conn-1')],
         worktreesByRepo: {
           'repo-ssh': [{ id: 'wt-ssh', repoId: 'repo-ssh' } as never]
         },

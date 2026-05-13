@@ -53,7 +53,8 @@ function formatWorkspace(session: { cwd: string | null; sessionId: string }): st
   const sep = session.sessionId.lastIndexOf('@@')
   if (sep !== -1) {
     const worktreeId = session.sessionId.slice(0, sep)
-    // Strip a leading `<uuid>::` prefix if present (newer protocol).
+    // Why: take everything after the first `::` to recover the worktree path
+    // from the canonical `${repoId}::${path}` worktreeId encoding.
     return shortCwd(splitWorktreeId(worktreeId)?.worktreePath ?? worktreeId)
   }
   return 'unknown'

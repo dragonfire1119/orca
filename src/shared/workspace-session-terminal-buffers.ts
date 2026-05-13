@@ -1,7 +1,8 @@
 import type { Repo, WorkspaceSessionState } from './types'
+import { FLOATING_TERMINAL_WORKTREE_ID } from './constants'
 import { getRepoIdFromWorktreeId } from './worktree-id'
 
-type RepoConnection = Pick<Repo, 'id' | 'connectionId'>
+export type RepoConnection = Pick<Repo, 'id' | 'connectionId'>
 
 export function pruneLocalTerminalScrollbackBuffers(
   session: WorkspaceSessionState,
@@ -22,15 +23,26 @@ export function pruneLocalTerminalScrollbackBuffers(
     }
     const worktreeId = worktreeIdByTabId.get(tabId)
     if (worktreeId !== undefined) {
+      if (worktreeId === FLOATING_TERMINAL_WORKTREE_ID) {
+        terminalLayoutsByTabId ??= { ...session.terminalLayoutsByTabId }
+        const layoutWithoutBuffers = { ...layout }
+        delete layoutWithoutBuffers.buffersByLeafId
+        terminalLayoutsByTabId[tabId] = layoutWithoutBuffers
+        continue
+      }
       const repoId = getRepoIdFromWorktreeId(worktreeId)
       const connectionId = connectionIdByRepoId.get(repoId)
       if (connectionId) {
         continue
       }
-      if (repos.length === 0 && !connectionIdByRepoId.has(repoId)) {
-        // Why: early session writes can run before the repo catalog hydrates.
-        // Preserve unknown worktree buffers until a later call can classify
-        // them as local or SSH-backed.
+      if (!connectionIdByRepoId.has(repoId)) {
+        // Why: when the repo catalog does not know this repoId — either because
+        // it is not yet hydrated, or because the repo has been removed — we
+        // cannot classify the worktree as local vs SSH. Preserve the buffer
+        // until a later call with a hydrated catalog can decide. SSH buffers
+        // are the only authoritative scrollback source, so the cost of a wrong
+        // prune (lost remote scrollback) is higher than the cost of a wrong
+        // preserve (extra bytes persisted).
         continue
       }
     }

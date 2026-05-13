@@ -76,9 +76,9 @@ const mockApi = {
 globalThis.window = { api: mockApi }
 
 import type { WorkspaceSessionState } from '../../../../shared/types'
+import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../../shared/constants'
 import { createTestStore, makeLayout, makeTab, makeWorktree, seedStore } from './store-test-helpers'
 import { canGoBackWorktreeHistory } from './worktree-nav-history'
-import { FLOATING_TERMINAL_WORKTREE_ID } from '@/lib/floating-terminal'
 
 describe('hydrateWorkspaceSession', () => {
   beforeEach(() => {

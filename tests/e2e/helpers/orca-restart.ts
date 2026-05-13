@@ -16,7 +16,7 @@ import {
   type TestInfo
 } from '@stablyai/playwright-test'
 import { execSync } from 'child_process'
-import { existsSync, mkdtempSync, rmSync } from 'fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import os from 'os'
 import path from 'path'
 
@@ -60,6 +60,31 @@ export function createRestartSession(testInfo: TestInfo): RestartSession {
   const mainPath = path.join(process.cwd(), 'out', 'main', 'index.js')
   const userDataDir = mkdtempSync(path.join(os.tmpdir(), 'orca-e2e-restart-'))
   const headful = shouldLaunchHeadful(testInfo)
+
+  // Why: this helper bypasses the shared `electronApp` fixture, so it must
+  // seed the same dismissed onboarding state or the full-screen overlay covers
+  // both launches and obscures restart failures.
+  writeFileSync(
+    path.join(userDataDir, 'orca-data.json'),
+    `${JSON.stringify(
+      {
+        settings: {
+          telemetry: {
+            optedIn: true,
+            installId: '00000000-0000-4000-8000-000000000000',
+            existedBeforeTelemetryRelease: false
+          }
+        },
+        onboarding: {
+          closedAt: 1,
+          outcome: 'completed',
+          lastCompletedStep: 4
+        }
+      },
+      null,
+      2
+    )}\n`
+  )
 
   const launch = async (): Promise<LaunchedOrca> => {
     const app = await electron.launch({

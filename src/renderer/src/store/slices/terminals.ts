@@ -8,6 +8,7 @@ import type {
   Worktree,
   WorkspaceSessionState
 } from '../../../../shared/types'
+import { FLOATING_TERMINAL_WORKTREE_ID } from '../../../../shared/constants'
 import { getRepoIdFromWorktreeId, splitWorktreeId } from '../../../../shared/worktree-id'
 import type { AgentStartedTelemetry } from '../../lib/worktree-activation'
 import { scheduleRuntimeGraphSync } from '@/runtime/sync-runtime-graph'
@@ -27,7 +28,6 @@ import {
   unregisterPtyDataHandlers
 } from '@/components/terminal-pane/pty-transport'
 import { shutdownBufferCaptures } from '@/components/terminal-pane/shutdown-buffer-captures'
-import { FLOATING_TERMINAL_WORKTREE_ID } from '@/lib/floating-terminal'
 
 function getNextTerminalOrdinal(tabs: TerminalTab[]): number {
   const usedOrdinals = new Set<number>()
