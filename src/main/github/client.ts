@@ -1232,7 +1232,7 @@ export async function getPRChecks(
     }
   } catch (err) {
     console.warn('getPRChecks failed:', err)
-    return []
+    throw err
   }
 }
 
