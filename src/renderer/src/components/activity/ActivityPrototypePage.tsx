@@ -266,26 +266,27 @@ function agentMeta(event: ActivityEvent): string {
   return event.state === 'waiting' ? `${agent} waiting` : `${agent} blocked`
 }
 
-// Why (label hierarchy): mirrors the per-workspace agents dropdown
-// (DashboardAgentRow / WorktreeCardAgents): user-renamed customTitle wins,
-// then a non-default terminal title (set via OSC by some agent CLIs), then
-// the agent's last prompt — the prompt IS what the agent's working on, so
-// it labels the row far better than the default "Terminal N". Falls back
-// to defaultTitle/Terminal only when nothing else is available.
+// Why (label hierarchy): mirror DashboardAgentRow — the agent's last prompt
+// IS what the agent is working on and is the primary signal users want at a
+// glance. A user-renamed customTitle still wins (explicit rename intent), but
+// the OSC-set live title ("Claude Code", "Codex", …) must NOT shadow the
+// prompt: agent CLIs set that title eagerly, so preferring it would pin every
+// row to the agent name and hide the actual turn. Fall back to a non-default
+// liveTitle only when there is no prompt at all.
 function paneTitleForEvent(event: ActivityEvent): string {
   const tab = event.tab
   const customTitle = tab.customTitle?.trim()
   if (customTitle) {
     return customTitle
   }
+  const prompt = event.entry.prompt.trim()
+  if (prompt) {
+    return prompt
+  }
   const liveTitle = tab.title?.trim()
   const defaultTitle = tab.defaultTitle?.trim()
   if (liveTitle && liveTitle !== defaultTitle) {
     return liveTitle
-  }
-  const prompt = event.entry.prompt.trim()
-  if (prompt) {
-    return prompt
   }
   return defaultTitle || liveTitle || 'Terminal'
 }
