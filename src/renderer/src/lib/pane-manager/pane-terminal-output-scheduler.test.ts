@@ -18,11 +18,28 @@ describe('pane terminal output scheduler', () => {
     vi.useRealTimers()
   })
 
-  it('writes foreground output immediately', async () => {
+  it('coalesces foreground output until the next frame flush', async () => {
+    vi.useFakeTimers()
     const { writeTerminalOutput } = await loadScheduler()
     const terminal = createTerminal()
 
+    writeTerminalOutput(terminal, 'a', { foreground: true })
+    writeTerminalOutput(terminal, 'b', { foreground: true })
+
+    expect(terminal.write).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(16)
+
+    expect(terminal.write).toHaveBeenCalledTimes(1)
+    expect(terminal.write).toHaveBeenCalledWith('ab')
+  })
+
+  it('flushes foreground output synchronously when requested', async () => {
+    vi.useFakeTimers()
+    const { flushTerminalOutput, writeTerminalOutput } = await loadScheduler()
+    const terminal = createTerminal()
+
     writeTerminalOutput(terminal, 'foreground', { foreground: true })
+    flushTerminalOutput(terminal)
 
     expect(terminal.write).toHaveBeenCalledWith('foreground')
   })
@@ -91,6 +108,8 @@ describe('pane terminal output scheduler', () => {
     writeTerminalOutput(terminal, 'old', { foreground: false })
     writeTerminalOutput(terminal, 'new', { foreground: true })
 
+    expect(terminal.write.mock.calls.map(([data]) => data)).toEqual(['old'])
+    vi.advanceTimersByTime(16)
     expect(terminal.write.mock.calls.map(([data]) => data)).toEqual(['old', 'new'])
   })
 

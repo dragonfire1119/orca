@@ -12,11 +12,14 @@ type QueueEntry = {
 const BACKGROUND_FLUSH_DELAY_MS = 50
 const BACKGROUND_DRAIN_INTERVAL_MS = 16
 const BACKGROUND_CHUNK_CHARS = 16 * 1024
+const FOREGROUND_FLUSH_DELAY_MS = 16
 const MAX_WRITES_PER_DRAIN = 2
 const PARSE_SETTLE_TIMEOUT_MS = 250
 
 const queuedByTerminal = new Map<TerminalOutputTarget, QueueEntry>()
+const foregroundQueuedByTerminal = new Map<TerminalOutputTarget, QueueEntry>()
 let drainTimer: ReturnType<typeof setTimeout> | null = null
+let foregroundDrainTimer: ReturnType<typeof setTimeout> | null = null
 const debugEnabled = e2eConfig.exposeStore
 
 // Why no lossy queue cap: dropping raw terminal bytes can corrupt parser state
@@ -28,8 +31,10 @@ type TerminalOutputSchedulerDebugSnapshot = {
   backgroundEnqueueCount: number
   foregroundWriteCount: number
   backgroundWriteCount: number
+  foregroundBatchedWriteCount: number
   flushWriteCount: number
   scheduledDrainCount: number
+  scheduledForegroundDrainCount: number
   drainWrites: number[]
 }
 
@@ -42,8 +47,10 @@ const debugState: TerminalOutputSchedulerDebugSnapshot = {
   backgroundEnqueueCount: 0,
   foregroundWriteCount: 0,
   backgroundWriteCount: 0,
+  foregroundBatchedWriteCount: 0,
   flushWriteCount: 0,
   scheduledDrainCount: 0,
+  scheduledForegroundDrainCount: 0,
   drainWrites: []
 }
 
@@ -51,8 +58,10 @@ function resetDebugState(): void {
   debugState.backgroundEnqueueCount = 0
   debugState.foregroundWriteCount = 0
   debugState.backgroundWriteCount = 0
+  debugState.foregroundBatchedWriteCount = 0
   debugState.flushWriteCount = 0
   debugState.scheduledDrainCount = 0
+  debugState.scheduledForegroundDrainCount = 0
   debugState.drainWrites = []
 }
 
@@ -84,6 +93,19 @@ function scheduleDrain(delayMs: number): void {
   drainTimer = setTimeout(drainQueuedOutput, delayMs)
 }
 
+function scheduleForegroundDrain(): void {
+  if (foregroundDrainTimer !== null) {
+    return
+  }
+  if (debugEnabled) {
+    debugState.scheduledForegroundDrainCount++
+  }
+  // Why: terminal TUIs repaint by moving the cursor through intermediate
+  // positions. Coalescing visible PTY bursts to one frame keeps those parser
+  // states from being painted as cursor flicker, especially on Windows xterm.
+  foregroundDrainTimer = setTimeout(drainForegroundOutput, FOREGROUND_FLUSH_DELAY_MS)
+}
+
 function takeQueuedChunk(entry: QueueEntry, limit: number): string {
   let remaining = limit
   let data = ''
@@ -105,6 +127,19 @@ function takeQueuedChunk(entry: QueueEntry, limit: number): string {
   return data
 }
 
+function writeAllQueuedChunks(entry: QueueEntry): void {
+  let data = takeQueuedChunk(entry, Number.POSITIVE_INFINITY)
+  while (data) {
+    try {
+      entry.terminal.write(data)
+    } catch {
+      entry.chunks.length = 0
+      return
+    }
+    data = takeQueuedChunk(entry, Number.POSITIVE_INFINITY)
+  }
+}
+
 function writeQueuedChunk(entry: QueueEntry): boolean {
   const data = takeQueuedChunk(entry, BACKGROUND_CHUNK_CHARS)
   if (!data) {
@@ -120,6 +155,19 @@ function writeQueuedChunk(entry: QueueEntry): boolean {
     return false
   }
   return true
+}
+
+function drainForegroundOutput(): void {
+  foregroundDrainTimer = null
+  const entries = [...foregroundQueuedByTerminal.values()]
+  foregroundQueuedByTerminal.clear()
+
+  for (const entry of entries) {
+    if (debugEnabled) {
+      debugState.foregroundBatchedWriteCount++
+    }
+    writeAllQueuedChunks(entry)
+  }
 }
 
 function drainQueuedOutput(): void {
@@ -163,11 +211,17 @@ export function writeTerminalOutput(
   }
 
   if (options.foreground) {
-    flushTerminalOutput(terminal)
+    flushBackgroundTerminalOutput(terminal)
     if (debugEnabled) {
       debugState.foregroundWriteCount++
     }
-    terminal.write(data)
+    let entry = foregroundQueuedByTerminal.get(terminal)
+    if (!entry) {
+      entry = { terminal, chunks: [] }
+      foregroundQueuedByTerminal.set(terminal, entry)
+    }
+    entry.chunks.push(data)
+    scheduleForegroundDrain()
     return
   }
 
@@ -186,8 +240,7 @@ export function writeTerminalOutput(
   scheduleDrain(BACKGROUND_FLUSH_DELAY_MS)
 }
 
-export function flushTerminalOutput(terminal: TerminalOutputTarget): void {
-  exposeDebugApi()
+function flushBackgroundTerminalOutput(terminal: TerminalOutputTarget): void {
   const entry = queuedByTerminal.get(terminal)
   if (!entry) {
     return
@@ -209,6 +262,20 @@ export function flushTerminalOutput(terminal: TerminalOutputTarget): void {
     }
     data = takeQueuedChunk(entry, BACKGROUND_CHUNK_CHARS)
   }
+}
+
+export function flushTerminalOutput(terminal: TerminalOutputTarget): void {
+  exposeDebugApi()
+  const foregroundEntry = foregroundQueuedByTerminal.get(terminal)
+  if (foregroundEntry) {
+    foregroundQueuedByTerminal.delete(terminal)
+    if (debugEnabled) {
+      debugState.flushWriteCount++
+    }
+    writeAllQueuedChunks(foregroundEntry)
+  }
+
+  flushBackgroundTerminalOutput(terminal)
 }
 
 export function waitForTerminalOutputParsed(terminal: TerminalOutputTarget): Promise<void> {
@@ -238,6 +305,7 @@ export function waitForTerminalOutputParsed(terminal: TerminalOutputTarget): Pro
 
 export function discardTerminalOutput(terminal: TerminalOutputTarget): void {
   exposeDebugApi()
+  foregroundQueuedByTerminal.delete(terminal)
   queuedByTerminal.delete(terminal)
 }
 
