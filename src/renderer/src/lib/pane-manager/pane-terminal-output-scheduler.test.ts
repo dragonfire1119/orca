@@ -66,6 +66,22 @@ describe('pane terminal output scheduler', () => {
     expect(terminal.classes.has('terminal-foreground-write-pending')).toBe(false)
   })
 
+  it('can hide the cursor immediately while input waits for echoed output', async () => {
+    vi.useFakeTimers()
+    const { suppressTerminalCursorUntilOutputSettles } = await loadScheduler()
+    const terminal = createTerminal()
+
+    suppressTerminalCursorUntilOutputSettles(terminal)
+
+    expect(terminal.classes.has('terminal-foreground-write-pending')).toBe(true)
+
+    vi.advanceTimersByTime(499)
+    expect(terminal.classes.has('terminal-foreground-write-pending')).toBe(true)
+
+    vi.advanceTimersByTime(1)
+    expect(terminal.classes.has('terminal-foreground-write-pending')).toBe(false)
+  })
+
   it('flushes foreground output synchronously when requested', async () => {
     vi.useFakeTimers()
     const { flushTerminalOutput, writeTerminalOutput } = await loadScheduler()

@@ -299,6 +299,11 @@ export function flushTerminalOutput(terminal: TerminalOutputTarget): void {
   flushBackgroundTerminalOutput(terminal)
 }
 
+export function suppressTerminalCursorUntilOutputSettles(terminal: TerminalOutputTarget): void {
+  suppressForegroundTerminalCursor(terminal)
+  scheduleForegroundTerminalCursorRestore(terminal, FOREGROUND_CURSOR_RESTORE_SAFETY_DELAY_MS)
+}
+
 export function waitForTerminalOutputParsed(terminal: TerminalOutputTarget): Promise<void> {
   flushTerminalOutput(terminal)
 
