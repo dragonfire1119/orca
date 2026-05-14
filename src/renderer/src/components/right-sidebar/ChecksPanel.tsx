@@ -158,7 +158,7 @@ export default function ChecksPanel(): React.JSX.Element {
         }
       }
     )
-  }, [repo, isFolder, branch, pr, linkedPR, fetchPRForBranch])
+  }, [repo, isFolder, branch, pr, activeWorktreeId, linkedPR, fetchPRForBranch])
 
   // Fetch checks via cached store method
   const fetchChecks = useCallback(
