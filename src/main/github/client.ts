@@ -990,6 +990,99 @@ export async function getWorkItemByOwnerRepo(
   }
 }
 
+type PullRequestLookupData = {
+  number: number
+  title: string
+  state: string
+  url: string
+  statusCheckRollup: unknown[]
+  updatedAt: string
+  isDraft?: boolean
+  mergeable: string
+  baseRefName?: string
+  headRefName?: string
+  baseRefOid?: string
+  headRefOid?: string
+}
+
+type RestPullRequest = {
+  number: number
+  title: string
+  state: string
+  html_url?: string
+  url?: string
+  updated_at?: string
+  draft?: boolean
+  merged_at?: string | null
+  mergeable?: boolean | null
+  mergeable_state?: string | null
+  base?: { ref?: string; sha?: string }
+  head?: { ref?: string; sha?: string }
+}
+
+const PR_LOOKUP_JSON_FIELDS =
+  'number,title,state,url,statusCheckRollup,updatedAt,isDraft,mergeable,baseRefName,headRefName,baseRefOid,headRefOid'
+
+function mapRestPRMergeable(pr: RestPullRequest): PRMergeableState {
+  const mergeableState = pr.mergeable_state?.toLowerCase()
+  if (mergeableState === 'dirty') {
+    return 'CONFLICTING'
+  }
+  if (mergeableState === 'clean' || pr.mergeable === true) {
+    return 'MERGEABLE'
+  }
+  return 'UNKNOWN'
+}
+
+function mapRestPullRequest(pr: RestPullRequest): PullRequestLookupData {
+  return {
+    number: pr.number,
+    title: pr.title,
+    state: pr.merged_at ? 'MERGED' : pr.state,
+    url: pr.html_url ?? pr.url ?? '',
+    statusCheckRollup: [],
+    updatedAt: pr.updated_at ?? '',
+    isDraft: pr.draft,
+    mergeable: mapRestPRMergeable(pr),
+    baseRefName: pr.base?.ref,
+    headRefName: pr.head?.ref,
+    baseRefOid: pr.base?.sha,
+    headRefOid: pr.head?.sha
+  }
+}
+
+async function getRestPRForBranch(
+  ownerRepo: OwnerRepo,
+  branchName: string,
+  ghOptions: ReturnType<typeof ghRepoExecOptions>
+): Promise<PullRequestLookupData | null> {
+  const head = encodeURIComponent(`${ownerRepo.owner}:${branchName}`)
+  const { stdout } = await ghExecFileAsync(
+    ['api', `repos/${ownerRepo.owner}/${ownerRepo.repo}/pulls?head=${head}&state=all&per_page=1`],
+    ghOptions
+  )
+  const list = JSON.parse(stdout) as RestPullRequest[]
+  const pr = list[0]
+  return pr ? mapRestPullRequest(pr) : null
+}
+
+async function getRestPRByNumber(
+  ownerRepo: OwnerRepo,
+  number: number,
+  ghOptions: ReturnType<typeof ghRepoExecOptions>
+): Promise<PullRequestLookupData | null> {
+  const { stdout } = await ghExecFileAsync(
+    ['api', `repos/${ownerRepo.owner}/${ownerRepo.repo}/pulls/${number}`],
+    ghOptions
+  )
+  return mapRestPullRequest(JSON.parse(stdout) as RestPullRequest)
+}
+
+function isNotFoundGhError(err: unknown): boolean {
+  const stderr = err instanceof Error ? err.message : String(err)
+  return classifyGhError(stderr).type === 'not_found'
+}
+
 /**
  * Get PR info for a given branch using gh CLI.
  * Returns null if gh is not installed, or no PR exists for the branch.
@@ -1014,54 +1107,44 @@ export async function getPRForBranch(
   await acquire()
   try {
     const ownerRepo = await getOwnerRepo(repoPath, connectionId)
-    let data: {
-      number: number
-      title: string
-      state: string
-      url: string
-      statusCheckRollup: unknown[]
-      updatedAt: string
-      isDraft?: boolean
-      mergeable: string
-      baseRefName?: string
-      headRefName?: string
-      baseRefOid?: string
-      headRefOid?: string
-    } | null = null
+    let data: PullRequestLookupData | null = null
 
     // During a rebase the worktree is in detached HEAD and branch is empty.
     // An empty --head filter causes gh to return an arbitrary PR — skip the
     // branch lookup and rely on the linkedPR fallback below if available.
     if (branchName) {
       if (ownerRepo) {
-        const { stdout } = await ghExecFileAsync(
-          [
-            'pr',
-            'list',
-            '--repo',
-            `${ownerRepo.owner}/${ownerRepo.repo}`,
-            '--head',
-            branchName,
-            '--state',
-            'all',
-            '--limit',
-            '1',
-            '--json',
-            'number,title,state,url,statusCheckRollup,updatedAt,isDraft,mergeable,baseRefName,headRefName,baseRefOid,headRefOid'
-          ],
-          ghOptions
-        )
-        const list = JSON.parse(stdout) as NonNullable<typeof data>[]
-        data = list[0] ?? null
+        try {
+          const { stdout } = await ghExecFileAsync(
+            [
+              'pr',
+              'list',
+              '--repo',
+              `${ownerRepo.owner}/${ownerRepo.repo}`,
+              '--head',
+              branchName,
+              '--state',
+              'all',
+              '--limit',
+              '1',
+              '--json',
+              PR_LOOKUP_JSON_FIELDS
+            ],
+            ghOptions
+          )
+          const list = JSON.parse(stdout) as PullRequestLookupData[]
+          data = list[0] ?? null
+        } catch (err) {
+          // Why: `gh pr list/view` uses GraphQL and can hit that quota while
+          // REST is still available. Falling back prevents a real PR from
+          // rendering as "No pull request found" during GraphQL outages.
+          if (!isNotFoundGhError(err)) {
+            data = await getRestPRForBranch(ownerRepo, branchName, ghOptions)
+          }
+        }
       } else {
         const { stdout } = await ghExecFileAsync(
-          [
-            'pr',
-            'view',
-            branchName,
-            '--json',
-            'number,title,state,url,statusCheckRollup,updatedAt,isDraft,mergeable,baseRefName,headRefName,baseRefOid,headRefOid'
-          ],
+          ['pr', 'view', branchName, '--json', PR_LOOKUP_JSON_FIELDS],
           ghOptions
         )
         data = JSON.parse(stdout)
@@ -1077,24 +1160,21 @@ export async function getPRForBranch(
             '--repo',
             `${ownerRepo.owner}/${ownerRepo.repo}`,
             '--json',
-            'number,title,state,url,statusCheckRollup,updatedAt,isDraft,mergeable,baseRefName,headRefName,baseRefOid,headRefOid'
+            PR_LOOKUP_JSON_FIELDS
           ]
-        : [
-            'pr',
-            'view',
-            String(linkedPRNumber),
-            '--json',
-            'number,title,state,url,statusCheckRollup,updatedAt,isDraft,mergeable,baseRefName,headRefName,baseRefOid,headRefOid'
-          ]
+        : ['pr', 'view', String(linkedPRNumber), '--json', PR_LOOKUP_JSON_FIELDS]
       try {
         const { stdout } = await ghExecFileAsync(args, ghOptions)
         data = JSON.parse(stdout)
-      } catch {
+      } catch (err) {
         // Why: a stale linkedPRNumber (PR deleted, wrong repo, …) makes
         // `gh pr view <number>` reject. Treat that as the no-PR case so
         // callers see the historical `null` semantics instead of a thrown
         // error every poll cycle.
-        data = null
+        data =
+          ownerRepo && !isNotFoundGhError(err)
+            ? await getRestPRByNumber(ownerRepo, linkedPRNumber, ghOptions)
+            : null
       }
     }
 

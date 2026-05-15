@@ -42,6 +42,10 @@ vi.mock('./gh-utils', () => ({
   gitExecFileAsync: gitExecFileAsyncMock,
   ghRepoExecOptions: ghRepoExecOptionsMock,
   githubRepoContext: githubRepoContextMock,
+  classifyGhError: (stderr: string) =>
+    stderr.toLowerCase().includes('not found') || stderr.includes('HTTP 404')
+      ? { type: 'not_found', message: stderr }
+      : { type: 'unknown', message: stderr },
   parseGitHubOwnerRepo: (remoteUrl: string) => {
     const match = remoteUrl.trim().match(/github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?$/)
     return match ? { owner: match[1], repo: match[2] } : null
@@ -118,6 +122,44 @@ describe('getPRForBranch', () => {
     expect(pr?.number).toBe(42)
     expect(pr?.state).toBe('open')
     expect(pr?.mergeable).toBe('MERGEABLE')
+  })
+
+  it('falls back to REST branch lookup when gh pr list is GraphQL rate limited', async () => {
+    getOwnerRepoMock.mockResolvedValueOnce({ owner: 'acme', repo: 'widgets' })
+    ghExecFileAsyncMock
+      .mockRejectedValueOnce(new Error('GraphQL: API rate limit already exceeded'))
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify([
+          {
+            number: 43,
+            title: 'REST branch lookup',
+            state: 'open',
+            html_url: 'https://github.com/acme/widgets/pull/43',
+            updated_at: '2026-03-28T00:00:00Z',
+            draft: false,
+            mergeable: true,
+            head: { ref: 'feature/test', sha: 'rest-head-oid' },
+            base: { ref: 'main', sha: 'rest-base-oid' }
+          }
+        ])
+      })
+
+    const pr = await getPRForBranch('/repo-root', 'feature/test')
+
+    expect(ghExecFileAsyncMock).toHaveBeenNthCalledWith(
+      2,
+      ['api', 'repos/acme/widgets/pulls?head=acme%3Afeature%2Ftest&state=all&per_page=1'],
+      { cwd: '/repo-root' }
+    )
+    expect(pr).toMatchObject({
+      number: 43,
+      title: 'REST branch lookup',
+      state: 'open',
+      url: 'https://github.com/acme/widgets/pull/43',
+      checksStatus: 'neutral',
+      mergeable: 'MERGEABLE',
+      headSha: 'rest-head-oid'
+    })
   })
 
   it('falls back to gh pr view when the remote cannot be resolved to GitHub', async () => {
@@ -286,6 +328,39 @@ describe('getPRForBranch', () => {
     const pr = await getPRForBranch('/repo-root', 'no-pr-branch')
 
     expect(pr).toBeNull()
+  })
+
+  it('falls back to REST number lookup when linked PR GraphQL lookup is rate limited', async () => {
+    getOwnerRepoMock.mockResolvedValueOnce({ owner: 'acme', repo: 'widgets' })
+    ghExecFileAsyncMock
+      .mockResolvedValueOnce({ stdout: JSON.stringify([]) })
+      .mockRejectedValueOnce(new Error('GraphQL: API rate limit already exceeded'))
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          number: 99,
+          title: 'REST linked PR lookup',
+          state: 'closed',
+          merged_at: '2026-03-28T00:00:00Z',
+          html_url: 'https://github.com/acme/widgets/pull/99',
+          updated_at: '2026-03-28T00:00:00Z',
+          draft: false,
+          mergeable_state: 'clean',
+          head: { ref: 'someone/fix', sha: 'linked-head-oid' },
+          base: { ref: 'main', sha: 'linked-base-oid' }
+        })
+      })
+
+    const pr = await getPRForBranch('/repo-root', 'feature/test', 99)
+
+    expect(ghExecFileAsyncMock).toHaveBeenNthCalledWith(3, ['api', 'repos/acme/widgets/pulls/99'], {
+      cwd: '/repo-root'
+    })
+    expect(pr).toMatchObject({
+      number: 99,
+      state: 'merged',
+      mergeable: 'MERGEABLE',
+      headSha: 'linked-head-oid'
+    })
   })
 
   it('resolves fork PR push target using the origin URL protocol', async () => {
