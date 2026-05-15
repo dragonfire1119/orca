@@ -15,6 +15,9 @@ function makeState(overrides: Partial<AppState> = {}): AppState {
     tabBarOrderByWorktree: {},
     activeFileId: null,
     activeFileIdByWorktree: {},
+    activeBrowserTabIdByWorktree: {},
+    browserTabsByWorktree: {},
+    browserPagesByWorkspace: {},
     openFiles: [],
     editorDrafts: {},
     activeTabId: null,
@@ -40,7 +43,10 @@ function makeSharedOverrides(): Partial<AppState> {
     activeGroupIdByWorktree: {},
     unifiedTabsByWorktree: {},
     tabBarOrderByWorktree: {},
-    activeFileIdByWorktree: {}
+    activeFileIdByWorktree: {},
+    activeBrowserTabIdByWorktree: {},
+    browserTabsByWorktree: {},
+    browserPagesByWorkspace: {}
   }
 }
 
