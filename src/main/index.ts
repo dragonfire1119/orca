@@ -645,7 +645,7 @@ function driveSyntheticTitleFromHook(
   sendSyntheticTitle(ptyId, `\x1b]0;${label}\x07\x07`)
 }
 
-app.whenReady().then(async () => {
+async function startAppAfterReady(): Promise<void> {
   electronApp.setAppUserModelId(devInstanceIdentity.appUserModelId)
   app.setName(devInstanceIdentity.name)
 
@@ -913,7 +913,17 @@ app.whenReady().then(async () => {
       openMainWindow()
     }
   })
-})
+}
+
+app
+  .whenReady()
+  .then(startAppAfterReady)
+  .catch((error) => {
+    // Why: a rejected pre-window startup step otherwise leaves Electron alive
+    // with no BrowserWindow, causing E2E to burn the full firstWindow timeout.
+    console.error('[startup] Failed before first window:', error)
+    app.exit(1)
+  })
 
 app.on('before-quit', () => {
   isQuitting = true

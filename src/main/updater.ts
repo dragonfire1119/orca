@@ -17,6 +17,7 @@ import {
   isBenignCheckFailure,
   isMissingUpdateManifestFailure,
   isPrereleaseVersion,
+  isValidVersion,
   statusesEqual
 } from './updater-fallback'
 import { fetchNewerReleaseTags, getReleaseDownloadUrl } from './updater-prerelease-feed'
@@ -707,6 +708,17 @@ export function setupAutoUpdater(
   if (!app.isPackaged && !is.dev) {
     return
   }
+
+  const appVersion = app.getVersion()
+  if (!isValidVersion(appVersion)) {
+    // Why: e2e/dev shells can use placeholder versions like "0.0"; touching
+    // electron-updater with those values throws before the first window opens.
+    console.warn(
+      `[autoUpdater] Skipping setup because app version is not valid semver: ${JSON.stringify(appVersion)}`
+    )
+    return
+  }
+
   if (is.dev) {
     // Why: dev-app-update.yml lives at config/dev-app-update.yml (not repo root)
     // so the root directory stays short. electron-updater only reads it when

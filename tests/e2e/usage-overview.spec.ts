@@ -11,7 +11,7 @@ test.describe('usage overview', () => {
   }) => {
     await orcaPage.evaluate(() => {
       const state = window.__store!.getState()
-      state.openSettingsTarget({ pane: 'stats' })
+      state.openSettingsTarget({ pane: 'stats', repoId: null })
       state.openSettingsPage()
     })
 

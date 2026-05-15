@@ -31,6 +31,9 @@ export default defineConfig({
   // launches an isolated Electron instance with its own userData dir, so they
   // don't share state — we can safely fan out to match the runner's vCPU count.
   workers: process.env.CI ? 4 : undefined,
+  // Why: app-wide startup failures otherwise burn the full 120s timeout across
+  // every spec and retry before uploading a useful trace.
+  maxFailures: process.env.CI ? 4 : undefined,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: 'list',

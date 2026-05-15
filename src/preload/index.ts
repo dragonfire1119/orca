@@ -33,6 +33,7 @@ import type {
   WorktreeBaseStatusEvent,
   WorktreeRemoteBranchConflictEvent
 } from '../shared/types'
+import type { GitHistoryOptions, GitHistoryResult } from '../shared/git-history'
 import type { ShellOpenLocalPathResult } from '../shared/shell-open-types'
 import type { SkillDiscoveryResult } from '../shared/skills'
 import type {
@@ -1880,6 +1881,9 @@ const api = {
       connectionId?: string
       includeIgnored?: boolean
     }): Promise<unknown> => ipcRenderer.invoke('git:status', args),
+    history: (
+      args: { worktreePath: string; connectionId?: string } & GitHistoryOptions
+    ): Promise<GitHistoryResult> => ipcRenderer.invoke('git:history', args),
     conflictOperation: (args: { worktreePath: string; connectionId?: string }): Promise<unknown> =>
       ipcRenderer.invoke('git:conflictOperation', args),
     diff: (args: {
@@ -1894,6 +1898,11 @@ const api = {
       baseRef: string
       connectionId?: string
     }): Promise<unknown> => ipcRenderer.invoke('git:branchCompare', args),
+    commitCompare: (args: {
+      worktreePath: string
+      commitId: string
+      connectionId?: string
+    }): Promise<unknown> => ipcRenderer.invoke('git:commitCompare', args),
     upstreamStatus: (args: {
       worktreePath: string
       connectionId?: string
@@ -1915,6 +1924,14 @@ const api = {
       oldPath?: string
       connectionId?: string
     }): Promise<unknown> => ipcRenderer.invoke('git:branchDiff', args),
+    commitDiff: (args: {
+      worktreePath: string
+      commitOid: string
+      parentOid?: string | null
+      filePath: string
+      oldPath?: string
+      connectionId?: string
+    }): Promise<unknown> => ipcRenderer.invoke('git:commitDiff', args),
     commit: (args: {
       worktreePath: string
       message: string

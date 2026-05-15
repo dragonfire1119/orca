@@ -315,6 +315,7 @@ export type UISlice = {
       | 'experimental'
       | 'servers'
       | 'mobile'
+      | 'stats'
       | 'ssh'
     repoId: string | null
     sectionId?: string

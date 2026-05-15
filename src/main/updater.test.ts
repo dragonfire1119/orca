@@ -151,6 +151,26 @@ describe('updater', () => {
     vi.useRealTimers()
   })
 
+  it('skips updater initialization when the app version is not valid semver', async () => {
+    appMock.getVersion.mockReturnValue('0.0')
+    const warnMock = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const mainWindow = { webContents: { send: vi.fn() } }
+
+    const { setupAutoUpdater } = await import('./updater')
+
+    setupAutoUpdater(mainWindow as never)
+
+    expect(warnMock).toHaveBeenCalledWith(
+      '[autoUpdater] Skipping setup because app version is not valid semver: "0.0"'
+    )
+    expect(autoUpdaterMock.setFeedURL).not.toHaveBeenCalled()
+    expect(autoUpdaterMock.on).not.toHaveBeenCalled()
+    expect(autoUpdaterMock.checkForUpdates).not.toHaveBeenCalled()
+    expect(fetchNudgeMock).not.toHaveBeenCalled()
+
+    warnMock.mockRestore()
+  })
+
   it('deduplicates identical check errors from the event and rejected promise', async () => {
     autoUpdaterMock.checkForUpdates.mockResolvedValueOnce(undefined).mockImplementationOnce(() => {
       autoUpdaterMock.emit('checking-for-update')

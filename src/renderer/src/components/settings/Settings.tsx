@@ -362,6 +362,10 @@ function Settings(): React.JSX.Element {
     )
     pendingNavSectionRef.current = paneSectionId
     pendingScrollTargetRef.current = settingsNavigationTarget.sectionId ?? paneSectionId
+    // Why: pending refs do not schedule render/effect work by themselves.
+    // Active section mounts lazy panes; the tick covers same-section jumps.
+    setActiveSectionId(paneSectionId)
+    setPendingNavRequestTick((tick) => tick + 1)
     clearSettingsTarget()
   }, [clearSettingsTarget, settings, settingsNavigationTarget])
 

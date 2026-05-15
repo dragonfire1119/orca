@@ -26,6 +26,10 @@ import { randomUUID } from 'crypto'
 import os from 'os'
 import path from 'path'
 import { TEST_REPO_PATH_FILE } from '../global-setup'
+import {
+  attachElectronProcessDiagnostics,
+  reportElectronProcessFailure
+} from './electron-process-diagnostics'
 import { cleanupE2EDaemons, closeElectronAppForE2E } from './electron-process-shutdown'
 
 type OrcaTestFixtures = {
@@ -201,38 +205,45 @@ export const test = base.extend<OrcaTestFixtures, OrcaWorkerFixtures>({
     if (recordVideoDir) {
       mkdirSync(recordVideoDir, { recursive: true })
     }
-    const app = await electron.launch({
-      args: [mainPath],
-      ...(slowMo > 0 ? { slowMo } : {}),
-      ...(recordVideoDir ? { recordVideo: { dir: recordVideoDir } } : {}),
-      // Why: keep NODE_ENV=development so window.__store is exposed and
-      // dev-only helpers activate. ORCA_E2E_USER_DATA_DIR overrides the usual
-      // shared dev profile so every spec gets a clean persistence root.
-      // Why: ORCA_E2E_HEADLESS suppresses mainWindow.show() so the app
-      // window stays hidden during test runs, avoiding focus stealing and
-      // screen clutter. Playwright interacts via CDP regardless.
-      // Why: ORCA_E2E_HEADLESS suppresses mainWindow.show() for CI/headless
-      // runs. ORCA_E2E_HEADFUL overrides this for tests that need a visible
-      // window (e.g. pointer-capture drag tests).
-      // Why: local SSH E2E deploys the relay from the dev build output. The
-      // Electron app's getAppPath() points at the compiled main bundle in E2E,
-      // so pass the repo-root relay path explicitly for this opt-in suite.
-      env: {
-        ...cleanEnv,
-        NODE_ENV: 'development',
-        ORCA_E2E_USER_DATA_DIR: userDataDir,
-        ...(process.env.ORCA_E2E_SSH_LOCALHOST === '1' && !cleanEnv.ORCA_RELAY_PATH
-          ? { ORCA_RELAY_PATH: path.join(process.cwd(), 'out', 'relay') }
-          : {}),
-        ...(headful ? { ORCA_E2E_HEADFUL: '1' } : { ORCA_E2E_HEADLESS: '1' })
+    let app: ElectronApplication | null = null
+    try {
+      app = await electron.launch({
+        args: [mainPath],
+        ...(slowMo > 0 ? { slowMo } : {}),
+        ...(recordVideoDir ? { recordVideo: { dir: recordVideoDir } } : {}),
+        // Why: keep NODE_ENV=development so window.__store is exposed and
+        // dev-only helpers activate. ORCA_E2E_USER_DATA_DIR overrides the usual
+        // shared dev profile so every spec gets a clean persistence root.
+        // Why: ORCA_E2E_HEADLESS suppresses mainWindow.show() so the app
+        // window stays hidden during test runs, avoiding focus stealing and
+        // screen clutter. Playwright interacts via CDP regardless.
+        // Why: ORCA_E2E_HEADLESS suppresses mainWindow.show() for CI/headless
+        // runs. ORCA_E2E_HEADFUL overrides this for tests that need a visible
+        // window (e.g. pointer-capture drag tests).
+        // Why: local SSH E2E deploys the relay from the dev build output. The
+        // Electron app's getAppPath() points at the compiled main bundle in E2E,
+        // so pass the repo-root relay path explicitly for this opt-in suite.
+        env: {
+          ...cleanEnv,
+          NODE_ENV: 'development',
+          ORCA_E2E_USER_DATA_DIR: userDataDir,
+          ...(process.env.ORCA_E2E_SSH_LOCALHOST === '1' && !cleanEnv.ORCA_RELAY_PATH
+            ? { ORCA_RELAY_PATH: path.join(process.cwd(), 'out', 'relay') }
+            : {}),
+          ...(headful ? { ORCA_E2E_HEADFUL: '1' } : { ORCA_E2E_HEADLESS: '1' })
+        }
+      })
+      attachElectronProcessDiagnostics(app, testInfo)
+      await provideFixture(app)
+    } finally {
+      if (app) {
+        // Why: the Playwright close promise can settle before all Electron and
+        // PTY descendants are gone in CI; worker teardown then hangs on open handles.
+        await closeElectronAppForE2E(app)
       }
-    })
-    await provideFixture(app)
-    // Why: the Playwright close promise can settle before all Electron and PTY
-    // descendants are gone in CI; worker teardown then hangs on open handles.
-    await closeElectronAppForE2E(app)
-    await cleanupE2EDaemons(userDataDir)
-    rmSync(userDataDir, { recursive: true, force: true })
+      await cleanupE2EDaemons(userDataDir)
+      rmSync(userDataDir, { recursive: true, force: true })
+    }
   },
 
   // Default: dismiss the onboarding overlay so it doesn't intercept clicks.
@@ -240,100 +251,116 @@ export const test = base.extend<OrcaTestFixtures, OrcaWorkerFixtures>({
 
   // Test-scoped: grab the first BrowserWindow, add the test repo, and wait
   // until the session is fully ready with a worktree active.
-  sharedPage: async ({ electronApp, testRepoPath }, provideFixture) => {
+  sharedPage: async ({ electronApp, testRepoPath }, provideFixture, testInfo) => {
     // Why: the Electron app may take a while to create the first window,
     // especially on cold start with no prior dev userData. Isolated per-test
     // profiles make late-suite launches slower, so use the full test budget.
-    const page = await electronApp.firstWindow({ timeout: 120_000 })
-    await page.waitForLoadState('domcontentloaded')
-
-    // Wait for the store to be available
-    await page.waitForFunction(() => Boolean(window.__store), null, { timeout: 30_000 })
-
-    const repoPath = isValidGitRepo(testRepoPath) ? testRepoPath : createSeededTestRepo()
-
-    // Add the test repo via the IPC bridge
-    // Why: calling window.api.repos.add() goes through the same code path as
-    // the "Add Project" UI flow, ensuring worktrees are fetched and the session
-    // initializes properly.
-    await page.evaluate(async (repoPath) => {
-      await window.api.repos.add({ path: repoPath })
-    }, repoPath)
-
-    // Fetch repos in the renderer store so it picks up the new repo
-    await page.evaluate(async () => {
-      const store = window.__store
-      if (!store) {
-        return
-      }
-
-      await store.getState().fetchRepos()
-    })
-
-    // Wait for the repo to appear and fetch its worktrees
-    await page.evaluate(async () => {
-      const store = window.__store
-      if (!store) {
-        return
-      }
-
-      const repos = store.getState().repos
-      for (const repo of repos) {
-        await store.getState().fetchWorktrees(repo.id)
-      }
-    })
-
-    // Wait for workspaceSessionReady to become true
-    await page.waitForFunction(
-      () => {
-        const store = window.__store
-        return store?.getState().workspaceSessionReady === true
-      },
-      null,
-      { timeout: 30_000 }
-    )
-
-    // Re-activate the test repo's primary worktree after session hydration.
-    // Why: workspaceSessionReady restoration can overwrite activeWorktreeId
-    // after earlier setup calls. Selecting it here ensures every test starts on
-    // the seeded repo instead of the "Select a worktree" empty state.
-    await page.evaluate((repoPath: string) => {
-      const store = window.__store
-      if (!store) {
-        return
-      }
-
-      const state = store.getState()
-      const allWorktrees = Object.values(state.worktreesByRepo).flat()
-      const testWorktree = allWorktrees.find(
-        (worktree) => worktree.path === repoPath || worktree.path.startsWith(repoPath)
+    let page: Page
+    try {
+      page = await electronApp.firstWindow({ timeout: 120_000 })
+    } catch (error) {
+      reportElectronProcessFailure(
+        'first BrowserWindow did not appear',
+        error,
+        electronApp,
+        testInfo
       )
-      if (testWorktree) {
-        state.setActiveWorktree(testWorktree.id)
-      }
-    }, repoPath)
+      throw error
+    }
+    try {
+      await page.waitForLoadState('domcontentloaded')
 
-    // Best-effort seed of a baseline terminal tab when a fresh isolated
-    // profile has none yet.
-    // Why: terminal-focused suites call ensureTerminalVisible(), which does the
-    // authoritative wait. The shared fixture itself should not block non-
-    // terminal suites on tab creation timing.
-    await page.evaluate(() => {
-      const store = window.__store
-      if (!store) {
-        return
-      }
-      const state = store.getState()
-      if (!state.activeWorktreeId) {
-        return
-      }
-      const tabs = state.tabsByWorktree[state.activeWorktreeId] ?? []
-      if (tabs.length === 0) {
-        state.createTab(state.activeWorktreeId)
-      }
-    })
+      // Wait for the store to be available
+      await page.waitForFunction(() => Boolean(window.__store), null, { timeout: 30_000 })
 
-    await provideFixture(page)
+      const repoPath = isValidGitRepo(testRepoPath) ? testRepoPath : createSeededTestRepo()
+
+      // Add the test repo via the IPC bridge
+      // Why: calling window.api.repos.add() goes through the same code path as
+      // the "Add Project" UI flow, ensuring worktrees are fetched and the session
+      // initializes properly.
+      await page.evaluate(async (repoPath) => {
+        await window.api.repos.add({ path: repoPath })
+      }, repoPath)
+
+      // Fetch repos in the renderer store so it picks up the new repo
+      await page.evaluate(async () => {
+        const store = window.__store
+        if (!store) {
+          return
+        }
+
+        await store.getState().fetchRepos()
+      })
+
+      // Wait for the repo to appear and fetch its worktrees
+      await page.evaluate(async () => {
+        const store = window.__store
+        if (!store) {
+          return
+        }
+
+        const repos = store.getState().repos
+        for (const repo of repos) {
+          await store.getState().fetchWorktrees(repo.id)
+        }
+      })
+
+      // Wait for workspaceSessionReady to become true
+      await page.waitForFunction(
+        () => {
+          const store = window.__store
+          return store?.getState().workspaceSessionReady === true
+        },
+        null,
+        { timeout: 30_000 }
+      )
+
+      // Re-activate the test repo's primary worktree after session hydration.
+      // Why: workspaceSessionReady restoration can overwrite activeWorktreeId
+      // after earlier setup calls. Selecting it here ensures every test starts on
+      // the seeded repo instead of the "Select a worktree" empty state.
+      await page.evaluate((repoPath: string) => {
+        const store = window.__store
+        if (!store) {
+          return
+        }
+
+        const state = store.getState()
+        const allWorktrees = Object.values(state.worktreesByRepo).flat()
+        const testWorktree = allWorktrees.find(
+          (worktree) => worktree.path === repoPath || worktree.path.startsWith(repoPath)
+        )
+        if (testWorktree) {
+          state.setActiveWorktree(testWorktree.id)
+        }
+      }, repoPath)
+
+      // Best-effort seed of a baseline terminal tab when a fresh isolated
+      // profile has none yet.
+      // Why: terminal-focused suites call ensureTerminalVisible(), which does the
+      // authoritative wait. The shared fixture itself should not block non-
+      // terminal suites on tab creation timing.
+      await page.evaluate(() => {
+        const store = window.__store
+        if (!store) {
+          return
+        }
+        const state = store.getState()
+        if (!state.activeWorktreeId) {
+          return
+        }
+        const tabs = state.tabsByWorktree[state.activeWorktreeId] ?? []
+        if (tabs.length === 0) {
+          state.createTab(state.activeWorktreeId)
+        }
+      })
+
+      await provideFixture(page)
+    } catch (error) {
+      reportElectronProcessFailure('shared page setup failed', error, electronApp, testInfo)
+      throw error
+    }
   },
 
   // Test-scoped: each test gets the shared page

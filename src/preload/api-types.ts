@@ -26,6 +26,7 @@ import type {
   GhosttyImportPreview,
   GlobalSettings,
   GitBranchCompareResult,
+  GitCommitCompareResult,
   GitConflictOperation,
   GitDiffResult,
   GitPushTarget,
@@ -95,6 +96,7 @@ import type {
   WorktreeStartupLaunch,
   WorkspaceSessionState
 } from '../shared/types'
+import type { GitHistoryOptions, GitHistoryResult } from '../shared/git-history'
 import type { PublicKnownRuntimeEnvironment } from '../shared/runtime-environments'
 import type { RuntimeRpcResponse } from '../shared/runtime-rpc-envelope'
 import type {
@@ -1329,6 +1331,9 @@ export type PreloadApi = {
       connectionId?: string
       includeIgnored?: boolean
     }) => Promise<GitStatusResult>
+    history: (
+      args: { worktreePath: string; connectionId?: string } & GitHistoryOptions
+    ) => Promise<GitHistoryResult>
     conflictOperation: (args: {
       worktreePath: string
       connectionId?: string
@@ -1345,6 +1350,11 @@ export type PreloadApi = {
       baseRef: string
       connectionId?: string
     }) => Promise<GitBranchCompareResult>
+    commitCompare: (args: {
+      worktreePath: string
+      commitId: string
+      connectionId?: string
+    }) => Promise<GitCommitCompareResult>
     upstreamStatus: (args: {
       worktreePath: string
       connectionId?: string
@@ -1365,6 +1375,14 @@ export type PreloadApi = {
         headOid: string
         mergeBase: string
       }
+      filePath: string
+      oldPath?: string
+      connectionId?: string
+    }) => Promise<GitDiffResult>
+    commitDiff: (args: {
+      worktreePath: string
+      commitOid: string
+      parentOid?: string | null
       filePath: string
       oldPath?: string
       connectionId?: string
