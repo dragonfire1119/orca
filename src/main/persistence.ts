@@ -85,6 +85,7 @@ import {
   normalizePersistedWorkspaceStatuses,
   normalizeWorkspaceStatuses
 } from '../shared/workspace-statuses'
+import { normalizeWorkspaceGroups, clearWorkspaceGroupFromMeta } from '../shared/workspace-groups'
 
 function encrypt(plaintext: string): string {
   if (!plaintext || !safeStorage.isEncryptionAvailable()) {
@@ -1274,6 +1275,7 @@ export class Store {
                 migrateLegacyDefaultStatusVisuals: !workspaceStatusesDefaultVisualsMigrated
               }
             )
+            const workspaceGroups = normalizeWorkspaceGroups(parsed.ui?.workspaceGroups)
             if (
               !workspaceStatusesDefaultOrderMigrated ||
               !workspaceStatusesDefaultWorkflowMigrated ||
@@ -1329,6 +1331,7 @@ export class Store {
               ...parsed.ui,
               sortBy: migrate ? ('smart' as const) : sort,
               workspaceStatuses,
+              workspaceGroups,
               _workspaceStatusesDefaultOrderMigrated: true,
               _workspaceStatusesDefaultWorkflowMigrated: true,
               _workspaceStatusesDefaultVisualsMigrated: true,
@@ -1443,6 +1446,16 @@ export class Store {
         pruneLocalTerminalScrollbackBuffers(result.workspaceSession, result.repos)
       )
     }
+
+    const validGroupIds = new Set((result.ui?.workspaceGroups ?? []).map((g) => g.id))
+    const strippedMeta: Record<string, WorktreeMeta> = {}
+    for (const [wtId, meta] of Object.entries(result.worktreeMeta ?? {})) {
+      strippedMeta[wtId] =
+        meta && meta.workspaceGroupId && !validGroupIds.has(meta.workspaceGroupId)
+          ? { ...meta, workspaceGroupId: null }
+          : meta
+    }
+    result = { ...result, worktreeMeta: strippedMeta }
 
     return this.migrateTelemetry(result, fileExistedOnLoad)
   }
@@ -2063,6 +2076,15 @@ export class Store {
     this.scheduleSave()
   }
 
+  deleteWorkspaceGroup(groupId: string): void {
+    this.state.ui = {
+      ...this.state.ui,
+      workspaceGroups: (this.state.ui?.workspaceGroups ?? []).filter((g) => g.id !== groupId)
+    }
+    this.state.worktreeMeta = clearWorkspaceGroupFromMeta(this.state.worktreeMeta, groupId)
+    this.scheduleSave()
+  }
+
   getWorktreeLineage(worktreeId: string): WorktreeLineage | undefined {
     return this.state.worktreeLineageById[worktreeId]
   }
@@ -2135,6 +2157,7 @@ export class Store {
       groupBy: normalizeGroupBy(this.state.ui?.groupBy),
       sortBy: normalizeSortBy(this.state.ui?.sortBy),
       workspaceStatuses: normalizeWorkspaceStatuses(this.state.ui?.workspaceStatuses),
+      workspaceGroups: normalizeWorkspaceGroups(this.state.ui?.workspaceGroups),
       workspaceBoardOpacity: clampWorkspaceBoardOpacity(this.state.ui?.workspaceBoardOpacity),
       workspaceBoardCompact: normalizeWorkspaceBoardCompact(this.state.ui?.workspaceBoardCompact),
       workspaceBoardColumnWidth: clampWorkspaceBoardColumnWidth(
@@ -2157,6 +2180,10 @@ export class Store {
         updates.workspaceStatuses !== undefined
           ? normalizeWorkspaceStatuses(updates.workspaceStatuses)
           : normalizeWorkspaceStatuses(this.state.ui?.workspaceStatuses),
+      workspaceGroups:
+        updates.workspaceGroups !== undefined
+          ? normalizeWorkspaceGroups(updates.workspaceGroups)
+          : normalizeWorkspaceGroups(this.state.ui?.workspaceGroups),
       workspaceBoardOpacity: clampWorkspaceBoardOpacity(
         updates.workspaceBoardOpacity ?? this.state.ui?.workspaceBoardOpacity
       ),
