@@ -44,7 +44,7 @@ import { hydrateShellPath, mergePathSegments } from './startup/hydrate-shell-pat
 import { acquireSingleInstanceLock } from './startup/single-instance-lock'
 import { RateLimitService } from './rate-limits/service'
 import { attachMainWindowServices } from './window/attach-main-window-services'
-import { createMainWindow } from './window/createMainWindow'
+import { createMainWindow, loadMainWindow } from './window/createMainWindow'
 import { CodexAccountService } from './codex-accounts/service'
 import { CodexRuntimeHomeService } from './codex-accounts/runtime-home-service'
 import { ClaudeAccountService } from './claude-accounts/service'
@@ -58,6 +58,7 @@ import { geminiHookService } from './gemini/hook-service'
 import { cursorHookService } from './cursor/hook-service'
 import { droidHookService } from './droid/hook-service'
 import { grokHookService } from './grok/hook-service'
+import { hermesHookService } from './hermes/hook-service'
 import {
   getPtyIdForPaneKey,
   registerPaneKeyTeardownListener,
@@ -271,7 +272,8 @@ function openMainWindow(): BrowserWindow {
       recordProcessGoneCrash('renderer', 'renderer', details.reason, details.exitCode ?? null, {
         processType: 'renderer'
       })
-    }
+    },
+    deferLoad: true
   })
   recordCrashBreadcrumb('main_window_created')
 
@@ -394,6 +396,7 @@ function openMainWindow(): BrowserWindow {
       })
     }
   })
+  loadMainWindow(window)
   return window
 }
 
@@ -505,6 +508,11 @@ const SYNTHETIC_TITLE_PROFILES: Record<string, SyntheticTitleProfile> = {
     workingLabel: 'Droid',
     permissionLabel: 'Droid - action required',
     idleLabel: 'Droid ready'
+  },
+  hermes: {
+    workingLabel: 'Hermes',
+    permissionLabel: 'Hermes - action required',
+    idleLabel: 'Hermes ready'
   }
 }
 
@@ -773,6 +781,13 @@ app.whenReady().then(async () => {
   })
   automations = new AutomationService(store, { claudeUsage, codexUsage })
   runtime.setAccountServices({ claudeAccounts, codexAccounts, rateLimits })
+  runtime.setCommitMessageAgentEnvironmentResolvers({
+    prepareForCodexLaunch: () =>
+      store!.getSettings().activeCodexManagedAccountId
+        ? codexRuntimeHome!.prepareForCodexLaunch()
+        : null,
+    prepareForClaudeLaunch: () => claudeRuntimeAuth!.prepareForClaudeLaunch()
+  })
   disposeFeatureWallFirstAgentTour = registerFeatureWallFirstAgentTour({
     stats,
     getWindow: () => mainWindow
@@ -793,7 +808,8 @@ app.whenReady().then(async () => {
     ['gemini', () => geminiHookService.install()],
     ['cursor', () => cursorHookService.install()],
     ['droid', () => droidHookService.install()],
-    ['grok', () => grokHookService.install()]
+    ['grok', () => grokHookService.install()],
+    ['hermes', () => hermesHookService.install()]
   ])
 
   app.on('child-process-gone', (_event, details) => {

@@ -10,19 +10,56 @@ import type { GlobalSettings } from '../../../../shared/types'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import type { AppState } from '../types'
 
-type CacheEntry<T> = { data: T | null; fetchedAt: number }
+type CacheEntry<T> = { data: T | null; fetchedAt: number; linkedReviewHintKey?: string }
 type FetchOptions = { force?: boolean; repoId?: string }
+type LinkedReviewHints = {
+  linkedGitHubPR?: number | null
+  linkedGitLabMR?: number | null
+  linkedBitbucketPR?: number | null
+  linkedGiteaPR?: number | null
+}
 
 const CACHE_TTL_MS = 60_000
 
 const inflightHostedReviewRequests = new Map<
   string,
-  { promise: Promise<HostedReviewInfo | null>; force: boolean; generation: number }
+  {
+    promise: Promise<HostedReviewInfo | null>
+    force: boolean
+    generation: number
+    linkedReviewHintKey: string
+  }
 >()
 const requestGenerations = new Map<string, number>()
 
 function isFresh<T>(entry: CacheEntry<T> | undefined): entry is CacheEntry<T> {
   return entry !== undefined && Date.now() - entry.fetchedAt < CACHE_TTL_MS
+}
+
+// Why: a branch-only null is weaker than a null after trying the persisted
+// linked review number. Track that distinction without changing the cache key.
+function linkedReviewHintKey(options?: LinkedReviewHints): string {
+  const hints = [
+    ['github', options?.linkedGitHubPR ?? null],
+    ['gitlab', options?.linkedGitLabMR ?? null],
+    ['bitbucket', options?.linkedBitbucketPR ?? null],
+    ['gitea', options?.linkedGiteaPR ?? null]
+  ] as const
+  return hints
+    .filter(([, number]) => number !== null)
+    .map(([provider, number]) => `${provider}:${number}`)
+    .join('|')
+}
+
+function shouldRefetchNullForLinkedHint(
+  cached: CacheEntry<HostedReviewInfo> | undefined,
+  hintKey: string
+): boolean {
+  return cached?.data === null && hintKey !== '' && (cached.linkedReviewHintKey ?? '') !== hintKey
+}
+
+function canReuseInflightHint(inflightHintKey: string, nextHintKey: string): boolean {
+  return nextHintKey === '' || inflightHintKey === nextHintKey
 }
 
 export function getHostedReviewCacheKey(
@@ -55,6 +92,30 @@ export type HostedReviewSlice = {
       linkedGiteaPR?: number | null
     }
   ) => Promise<HostedReviewInfo | null>
+}
+
+type RefreshHostedReviewCardArgs = {
+  repoPath: string
+  repoId: string
+  branch: string
+  linkedGitHubPR?: number | null
+  linkedGitLabMR?: number | null
+  linkedBitbucketPR?: number | null
+  linkedGiteaPR?: number | null
+}
+
+export function refreshHostedReviewCard(
+  fetchHostedReviewForBranch: HostedReviewSlice['fetchHostedReviewForBranch'],
+  args: RefreshHostedReviewCardArgs
+): Promise<HostedReviewInfo | null> {
+  return fetchHostedReviewForBranch(args.repoPath, args.branch, {
+    force: true,
+    repoId: args.repoId,
+    linkedGitHubPR: args.linkedGitHubPR ?? null,
+    linkedGitLabMR: args.linkedGitLabMR ?? null,
+    linkedBitbucketPR: args.linkedBitbucketPR ?? null,
+    linkedGiteaPR: args.linkedGiteaPR ?? null
+  })
 }
 
 export const createHostedReviewSlice: StateCreator<AppState, [], [], HostedReviewSlice> = (
@@ -113,18 +174,17 @@ export const createHostedReviewSlice: StateCreator<AppState, [], [], HostedRevie
     const target = getActiveRuntimeTarget(settings)
     const cacheKey = getHostedReviewCacheKey(repoPath, branch, settings, options?.repoId)
     const cached = get().hostedReviewCache[cacheKey]
-    const linkedRefetch =
-      cached?.data === null &&
-      ((options?.linkedGitHubPR ?? null) !== null ||
-        (options?.linkedGitLabMR ?? null) !== null ||
-        (options?.linkedBitbucketPR ?? null) !== null ||
-        (options?.linkedGiteaPR ?? null) !== null)
+    const hintKey = linkedReviewHintKey(options)
+    const linkedRefetch = shouldRefetchNullForLinkedHint(cached, hintKey)
     if (!options?.force && !linkedRefetch && isFresh(cached)) {
       return cached.data
     }
 
     const inflightRequest = inflightHostedReviewRequests.get(cacheKey)
-    if (inflightRequest && (!options?.force || inflightRequest.force) && !linkedRefetch) {
+    const inflightHasRequestedHint =
+      inflightRequest !== undefined &&
+      canReuseInflightHint(inflightRequest.linkedReviewHintKey, hintKey)
+    if (inflightRequest && (!options?.force || inflightRequest.force) && inflightHasRequestedHint) {
       return inflightRequest.promise
     }
 
@@ -158,7 +218,7 @@ export const createHostedReviewSlice: StateCreator<AppState, [], [], HostedRevie
           set((state) => ({
             hostedReviewCache: {
               ...state.hostedReviewCache,
-              [cacheKey]: { data: review, fetchedAt: Date.now() }
+              [cacheKey]: { data: review, fetchedAt: Date.now(), linkedReviewHintKey: hintKey }
             }
           }))
         }
@@ -169,7 +229,7 @@ export const createHostedReviewSlice: StateCreator<AppState, [], [], HostedRevie
           set((state) => ({
             hostedReviewCache: {
               ...state.hostedReviewCache,
-              [cacheKey]: { data: null, fetchedAt: Date.now() }
+              [cacheKey]: { data: null, fetchedAt: Date.now(), linkedReviewHintKey: hintKey }
             }
           }))
         }
@@ -185,7 +245,8 @@ export const createHostedReviewSlice: StateCreator<AppState, [], [], HostedRevie
     inflightHostedReviewRequests.set(cacheKey, {
       promise: request,
       force: Boolean(options?.force),
-      generation
+      generation,
+      linkedReviewHintKey: hintKey
     })
     return request
   }

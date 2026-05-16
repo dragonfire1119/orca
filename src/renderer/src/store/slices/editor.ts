@@ -5,6 +5,7 @@ import { joinPath } from '@/lib/path'
 import { toast } from 'sonner'
 import { resolveMarkdownLinkTarget } from '@/components/editor/markdown-internal-links'
 import { openHttpLink } from '@/lib/http-link-routing'
+import { isLocalPathOpenBlocked, showLocalPathOpenBlockedToast } from '@/lib/local-path-open-guard'
 import { detectLanguage } from '@/lib/language-detect'
 import type {
   GitBranchChangeEntry,
@@ -32,7 +33,7 @@ import {
 import {
   deleteRuntimePath,
   deleteRuntimeRelativePath,
-  runtimePathExists
+  statRuntimePath
 } from '@/runtime/runtime-file-client'
 import { settingsForRuntimeOwner } from '@/runtime/runtime-rpc-client'
 import { findWorktreeById, getRepoIdFromWorktreeId } from './worktree-helpers'
@@ -313,6 +314,7 @@ export type EditorSlice = {
 
   // Git status cache
   gitStatusByWorktree: Record<string, GitStatusEntry[]>
+  gitIgnoredPathsByWorktree: Record<string, string[]>
   gitConflictOperationByWorktree: Record<string, GitConflictOperation>
   trackedConflictPathsByWorktree: Record<string, Record<string, GitConflictKind>>
   trackConflictPath: (worktreeId: string, path: string, conflictKind: GitConflictKind) => void
@@ -381,12 +383,15 @@ export type EditorSlice = {
       results: SearchResult | null
       loading: boolean
       collapsedFiles: Set<string>
+      seedRequestId?: number
     }
   >
   updateFileSearchState: (
     worktreeId: string,
     updates: Partial<EditorSlice['fileSearchStateByWorktree'][string]>
   ) => void
+  seedFileSearchQuery: (worktreeId: string, query: string) => void
+  consumeFileSearchSeedRequest: (worktreeId: string, seedRequestId: number) => void
   toggleFileSearchCollapsedFile: (worktreeId: string, filePath: string) => void
   clearFileSearch: (worktreeId: string) => void
 
@@ -466,12 +471,24 @@ function extractPublishFailureDetail(message: string): string | null {
   return null
 }
 
-function resolveRemoteOperationErrorMessage(
+export function resolveRemoteOperationErrorMessage(
   error: unknown,
-  options?: { publish?: boolean; isPush?: boolean; isSync?: boolean }
+  options?: { publish?: boolean; isPush?: boolean; isSync?: boolean; isFetch?: boolean }
 ): string {
   if (!(error instanceof Error)) {
     return REMOTE_OPERATION_FAILED_MESSAGE
+  }
+
+  if (/unmerged files|needs merge|you have not concluded your merge/i.test(error.message)) {
+    return options?.isSync
+      ? 'Sync blocked — resolve existing merge conflicts first.'
+      : 'Pull blocked — resolve existing merge conflicts first.'
+  }
+
+  if (/automatic merge failed|CONFLICT \(|fix conflicts/i.test(error.message)) {
+    return options?.isSync
+      ? 'Sync stopped with merge conflicts. Resolve them in Source Control, then commit the merge.'
+      : 'Pull stopped with merge conflicts. Resolve them in Source Control, then commit the merge.'
   }
 
   // Why: under sync, the inner push runs *after* a successful pull, so a
@@ -535,6 +552,13 @@ function resolveRemoteOperationErrorMessage(
     return 'Push failed. Check your connection and try again.'
   }
 
+  if (options?.isFetch) {
+    const detail =
+      extractPublishFailureDetail(error.message) ??
+      truncateDetail(stripCredentialsFromMessage(error.message))
+    return `Fetch failed. ${detail}`
+  }
+
   return error.message
 }
 
@@ -561,6 +585,13 @@ function deleteUntouchedUntitledFile(state: AppState, file: OpenFile): void {
       return undefined
     })
     .catch(() => {})
+}
+
+function getWorktreeConnectionId(state: AppState, worktreeId: string): string | undefined {
+  const worktree = findWorktreeById(state.worktreesByRepo ?? {}, worktreeId)
+  const repoId = worktree?.repoId ?? getRepoIdFromWorktreeId(worktreeId)
+  const repo = (state.repos ?? []).find((candidate) => candidate.id === repoId)
+  return repo?.connectionId ?? undefined
 }
 
 export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (set, get) => ({
@@ -1824,6 +1855,7 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
 
   // Git status
   gitStatusByWorktree: {},
+  gitIgnoredPathsByWorktree: {},
   gitConflictOperationByWorktree: {},
   trackedConflictPathsByWorktree: {},
   trackConflictPath: (worktreeId, path, conflictKind) =>
@@ -1912,7 +1944,20 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
       const openFilesUnchanged = nextOpenFiles === s.openFiles
       const operationUnchanged = prevOperation === status.conflictOperation
 
-      if (statusUnchanged && trackedUnchanged && openFilesUnchanged && operationUnchanged) {
+      const prevIgnored = s.gitIgnoredPathsByWorktree[worktreeId]
+      const nextIgnored = status.ignoredPaths ?? []
+      const ignoredUnchanged =
+        prevIgnored !== undefined &&
+        prevIgnored.length === nextIgnored.length &&
+        prevIgnored.every((p, i) => p === nextIgnored[i])
+
+      if (
+        statusUnchanged &&
+        trackedUnchanged &&
+        openFilesUnchanged &&
+        operationUnchanged &&
+        ignoredUnchanged
+      ) {
         return s
       }
 
@@ -1921,6 +1966,9 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
         gitStatusByWorktree: statusUnchanged
           ? s.gitStatusByWorktree
           : { ...s.gitStatusByWorktree, [worktreeId]: nextEntries },
+        gitIgnoredPathsByWorktree: ignoredUnchanged
+          ? s.gitIgnoredPathsByWorktree
+          : { ...s.gitIgnoredPathsByWorktree, [worktreeId]: nextIgnored },
         gitConflictOperationByWorktree: operationUnchanged
           ? s.gitConflictOperationByWorktree
           : { ...s.gitConflictOperationByWorktree, [worktreeId]: status.conflictOperation },
@@ -1960,12 +2008,17 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
     }),
   remoteStatusesByWorktree: {},
   setUpstreamStatus: (worktreeId, status) =>
-    set((s) => ({
-      remoteStatusesByWorktree: {
-        ...s.remoteStatusesByWorktree,
-        [worktreeId]: status
+    set((s) => {
+      if (areUpstreamStatusesEqual(s.remoteStatusesByWorktree[worktreeId], status)) {
+        return s
       }
-    })),
+      return {
+        remoteStatusesByWorktree: {
+          ...s.remoteStatusesByWorktree,
+          [worktreeId]: status
+        }
+      }
+    }),
   isRemoteOperationActive: false,
   remoteOperationDepth: 0,
   inFlightRemoteOpKind: null,
@@ -2100,7 +2153,7 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
     try {
       await fetchRuntimeGit({ settings: get().settings, worktreeId, worktreePath, connectionId })
     } catch (error) {
-      toast.error(resolveRemoteOperationErrorMessage(error))
+      toast.error(resolveRemoteOperationErrorMessage(error, { isFetch: true }))
       throw error
     } finally {
       get().endRemoteOperation()
@@ -2186,6 +2239,48 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
         }
       }
     }),
+  seedFileSearchQuery: (worktreeId, query) =>
+    set((s) => {
+      const current = s.fileSearchStateByWorktree[worktreeId] || {
+        query: '',
+        caseSensitive: false,
+        wholeWord: false,
+        useRegex: false,
+        includePattern: '',
+        excludePattern: '',
+        results: null,
+        loading: false,
+        collapsedFiles: new Set()
+      }
+      return {
+        fileSearchStateByWorktree: {
+          ...s.fileSearchStateByWorktree,
+          [worktreeId]: {
+            ...current,
+            query,
+            results: null,
+            loading: false,
+            collapsedFiles: new Set(),
+            seedRequestId: (current.seedRequestId ?? 0) + 1
+          }
+        }
+      }
+    }),
+  consumeFileSearchSeedRequest: (worktreeId, seedRequestId) =>
+    set((s) => {
+      const current = s.fileSearchStateByWorktree[worktreeId]
+      if (!current || current.seedRequestId !== seedRequestId) {
+        return s
+      }
+      const next = { ...current }
+      delete next.seedRequestId
+      return {
+        fileSearchStateByWorktree: {
+          ...s.fileSearchStateByWorktree,
+          [worktreeId]: next
+        }
+      }
+    }),
   toggleFileSearchCollapsedFile: (worktreeId, filePath) =>
     set((s) => {
       const current = s.fileSearchStateByWorktree[worktreeId]
@@ -2230,11 +2325,23 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
   setPendingEditorReveal: (reveal) => set({ pendingEditorReveal: reveal }),
 
   activateMarkdownLink: async (rawHref, ctx) => {
+    const initialState = get()
     const sourceRuntimeEnvironmentId =
       ctx.runtimeEnvironmentId ??
-      get().openFiles.find((file) => file.filePath === ctx.sourceFilePath)?.runtimeEnvironmentId ??
+      initialState.openFiles.find((file) => file.filePath === ctx.sourceFilePath)
+        ?.runtimeEnvironmentId ??
       null
-    const sourceSettings = settingsForRuntimeOwner(get().settings, sourceRuntimeEnvironmentId)
+    const sourceSettings = settingsForRuntimeOwner(
+      initialState.settings,
+      sourceRuntimeEnvironmentId
+    )
+    const sourceConnectionId = getWorktreeConnectionId(initialState, ctx.worktreeId)
+    const fileContext = {
+      settings: sourceSettings,
+      worktreeId: ctx.worktreeId,
+      worktreePath: ctx.worktreeRoot,
+      connectionId: sourceConnectionId
+    }
     const target = resolveMarkdownLinkTarget(rawHref, ctx.sourceFilePath, ctx.worktreeRoot)
     if (!target) {
       return
@@ -2249,17 +2356,28 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
     if (target.kind === 'file') {
       const { line, column } = target
       if (target.relativePath === undefined) {
-        if (sourceSettings?.activeRuntimeEnvironmentId?.trim()) {
+        if (isLocalPathOpenBlocked(sourceSettings, { connectionId: sourceConnectionId })) {
           // Why: a file:// link outside the worktree is a client-local escape
-          // hatch. Remote runtime editors must not authorize/open client paths
-          // as though the server could read them.
-          toast.error('External local file links are not available for remote runtime files yet.')
+          // hatch. Remote runtime/SSH editors must not treat server paths as client paths.
+          showLocalPathOpenBlockedToast()
           return
         }
         // Why: terminal file links already authorize clicked external paths
         // before opening them in Orca. Markdown file:// links need the same
         // user-gesture authorization so /tmp screenshots can use ImageViewer.
         await window.api.fs.authorizeExternalPath({ targetPath: target.absolutePath })
+      } else {
+        let stats: { isDirectory: boolean }
+        try {
+          stats = await statRuntimePath(fileContext, target.absolutePath)
+        } catch {
+          toast.error(`File not found: ${target.relativePath}`)
+          return
+        }
+        if (stats.isDirectory) {
+          toast.error(`Cannot open directory: ${target.relativePath}`)
+          return
+        }
       }
 
       get().openFile(
@@ -2285,16 +2403,15 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
 
     // target.kind === 'markdown'
     const { absolutePath, relativePath, line, column } = target
-    const exists = await runtimePathExists(
-      {
-        settings: sourceSettings,
-        worktreeId: ctx.worktreeId,
-        worktreePath: ctx.worktreeRoot
-      },
-      absolutePath
-    )
-    if (!exists) {
+    let stats: { isDirectory: boolean }
+    try {
+      stats = await statRuntimePath(fileContext, absolutePath)
+    } catch {
       toast.error(`File not found: ${relativePath}`)
+      return
+    }
+    if (stats.isDirectory) {
+      toast.error(`Cannot open directory: ${relativePath}`)
       return
     }
 
@@ -2523,6 +2640,19 @@ function areTrackedConflictMapsEqual(
   const prevKeys = Object.keys(prev)
   const nextKeys = Object.keys(next)
   return prevKeys.length === nextKeys.length && prevKeys.every((key) => prev[key] === next[key])
+}
+
+function areUpstreamStatusesEqual(
+  prev: GitUpstreamStatus | undefined,
+  next: GitUpstreamStatus
+): boolean {
+  return (
+    prev !== undefined &&
+    prev.hasUpstream === next.hasUpstream &&
+    prev.upstreamName === next.upstreamName &&
+    prev.ahead === next.ahead &&
+    prev.behind === next.behind
+  )
 }
 
 function reconcileOpenFilesForStatus(

@@ -145,6 +145,7 @@ import type {
   BrowserPopupEvent
 } from '../shared/browser-guest-events'
 import type { ElectronAPI } from '@electron-toolkit/preload'
+import type { BrowserSetAnnotationViewportBridgeArgs } from '../shared/browser-annotation-viewport-bridge'
 import type { CliInstallStatus } from '../shared/cli-install-types'
 import type { E2EConfig } from '../shared/e2e-config'
 import type { AgentHookInstallStatus } from '../shared/agent-hook-types'
@@ -268,6 +269,7 @@ export type BrowserApi = {
     browserPageId: string
     override: BrowserViewportOverride | null
   }) => Promise<boolean>
+  setAnnotationViewportBridge: (args: BrowserSetAnnotationViewportBridgeArgs) => Promise<boolean>
   onGuestLoadFailed: (
     callback: (args: { browserPageId: string; loadError: BrowserLoadError }) => void
   ) => () => void
@@ -787,6 +789,14 @@ export type PreloadApi = {
       threadId: string
       resolve: boolean
     }) => Promise<boolean>
+    setPRFileViewed: (args: {
+      repoPath: string
+      repoId?: string
+      prNumber: number
+      pullRequestId: string
+      path: string
+      viewed: boolean
+    }) => Promise<boolean>
     updatePRTitle: (args: {
       repoPath: string
       repoId?: string
@@ -1093,6 +1103,7 @@ export type PreloadApi = {
     cursorStatus: () => Promise<AgentHookInstallStatus>
     droidStatus: () => Promise<AgentHookInstallStatus>
     grokStatus: () => Promise<AgentHookInstallStatus>
+    hermesStatus: () => Promise<AgentHookInstallStatus>
   }
   agentTrust: {
     markTrusted: (args: { preset: 'cursor' | 'copilot'; workspacePath: string }) => Promise<void>
@@ -1324,7 +1335,11 @@ export type PreloadApi = {
     onFsChanged: (callback: (payload: FsChangedPayload) => void) => () => void
   }
   git: {
-    status: (args: { worktreePath: string; connectionId?: string }) => Promise<GitStatusResult>
+    status: (args: {
+      worktreePath: string
+      connectionId?: string
+      includeIgnored?: boolean
+    }) => Promise<GitStatusResult>
     conflictOperation: (args: {
       worktreePath: string
       connectionId?: string
@@ -1460,6 +1475,8 @@ export type PreloadApi = {
     onSwitchTab: (callback: (direction: 1 | -1) => void) => () => void
     onSwitchTabAcrossAllTypes: (callback: (direction: 1 | -1) => void) => () => void
     onSwitchTerminalTab: (callback: (direction: 1 | -1) => void) => () => void
+    onCtrlTabKeyDown: (callback: (data: { shiftKey: boolean }) => void) => () => void
+    onCtrlTabKeyUp: (callback: () => void) => () => void
     onToggleStatusBar: (callback: () => void) => () => void
     onDictationKeyDown: (callback: () => void) => () => void
     onExportPdfRequested: (callback: () => void) => () => void
@@ -1490,6 +1507,7 @@ export type PreloadApi = {
         afterTabId?: string
         command?: string
         title?: string
+        activate?: boolean
       }) => void
     ) => () => void
     replyTerminalCreate: (reply: {

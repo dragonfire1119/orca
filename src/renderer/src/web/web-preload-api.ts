@@ -470,9 +470,9 @@ function createFileApi(): NonNullable<Partial<PreloadApi>['fs']> {
 
 function createGitApi(): NonNullable<Partial<PreloadApi>['git']> {
   return {
-    status: async ({ worktreePath }) => {
+    status: async ({ worktreePath, includeIgnored }) => {
       const worktree = await resolveRuntimeWorktreeByPath(worktreePath)
-      return callRuntimeResult('git.status', { worktree: worktree.id })
+      return callRuntimeResult('git.status', { worktree: worktree.id, includeIgnored })
     },
     conflictOperation: async ({ worktreePath }) => {
       const worktree = await resolveRuntimeWorktreeByPath(worktreePath)
@@ -556,6 +556,7 @@ function createBrowserApi(): NonNullable<Partial<PreloadApi>['browser']> {
     unregisterGuest: () => Promise.resolve(),
     openDevTools: () => Promise.resolve(false),
     setViewportOverride: () => Promise.resolve(false),
+    setAnnotationViewportBridge: () => Promise.resolve(false),
     onGuestLoadFailed: () => noopUnsubscribe,
     onPermissionDenied: () => noopUnsubscribe,
     onPopup: () => noopUnsubscribe,
@@ -626,6 +627,7 @@ function createGitHubApi(): NonNullable<Partial<PreloadApi>['gh']> {
     prChecks: direct('github.prChecks'),
     prComments: direct('github.prComments'),
     resolveReviewThread: direct('github.resolveReviewThread'),
+    setPRFileViewed: direct('github.setPRFileViewed'),
     updatePRTitle: direct('github.updatePRTitle'),
     mergePR: direct('github.mergePR'),
     updateIssue: direct('github.updateIssue'),
@@ -723,6 +725,8 @@ function createWebUiApi(): NonNullable<Partial<PreloadApi>['ui']> {
     onSwitchTab: () => noopUnsubscribe,
     onSwitchTabAcrossAllTypes: () => noopUnsubscribe,
     onSwitchTerminalTab: () => noopUnsubscribe,
+    onCtrlTabKeyDown: () => noopUnsubscribe,
+    onCtrlTabKeyUp: () => noopUnsubscribe,
     onToggleStatusBar: () => noopUnsubscribe,
     onDictationKeyDown: () => noopUnsubscribe,
     onExportPdfRequested: () => noopUnsubscribe,
@@ -819,7 +823,7 @@ function createCliApi(): NonNullable<Partial<PreloadApi>['cli']> {
 }
 
 function createAgentHooksApi(): NonNullable<Partial<PreloadApi>['agentHooks']> {
-  const status = (agent: 'claude' | 'codex' | 'gemini' | 'cursor' | 'droid' | 'grok') =>
+  const status = (agent: 'claude' | 'codex' | 'gemini' | 'cursor' | 'droid' | 'grok' | 'hermes') =>
     Promise.resolve({
       agent,
       state: 'not_installed',
@@ -833,7 +837,8 @@ function createAgentHooksApi(): NonNullable<Partial<PreloadApi>['agentHooks']> {
     geminiStatus: () => status('gemini'),
     cursorStatus: () => status('cursor'),
     droidStatus: () => status('droid'),
-    grokStatus: () => status('grok')
+    grokStatus: () => status('grok'),
+    hermesStatus: () => status('hermes')
   }
 }
 

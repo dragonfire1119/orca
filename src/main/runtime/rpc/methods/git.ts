@@ -1,11 +1,16 @@
 import { z } from 'zod'
 import { defineMethod, type RpcMethod } from '../core'
+import type { GlobalSettings } from '../../../../shared/types'
 
 const WorktreeSelector = z.object({
   worktree: z
     .unknown()
     .transform((v) => (typeof v === 'string' ? v : ''))
     .pipe(z.string().min(1, 'Missing worktree selector'))
+})
+
+const GitStatusParams = WorktreeSelector.extend({
+  includeIgnored: z.boolean().optional()
 })
 
 const GitFilePath = WorktreeSelector.extend({
@@ -53,8 +58,23 @@ const GitCommit = WorktreeSelector.extend({
     .pipe(z.string().min(1, 'Missing commit message'))
 })
 
+const CommitMessageAiSettings = z.object({
+  enabled: z.boolean(),
+  agentId: z.string().nullable(),
+  selectedModelByAgent: z.record(z.string(), z.string()),
+  selectedThinkingByModel: z.record(z.string(), z.string()),
+  customPrompt: z.string(),
+  customAgentCommand: z.string()
+})
+
+const GitGenerateCommitMessage = WorktreeSelector.extend({
+  commitMessageAi: CommitMessageAiSettings.optional(),
+  agentCmdOverrides: z.record(z.string(), z.string()).optional(),
+  enableGitHubAttribution: z.boolean().optional()
+})
+
 const GitBulkPaths = WorktreeSelector.extend({
-  filePaths: z.array(z.string())
+  filePaths: z.array(z.string().min(1, 'Missing file path'))
 })
 
 const GitPush = WorktreeSelector.extend({
@@ -73,8 +93,11 @@ const GitRemoteFileUrl = WorktreeSelector.extend({
 export const GIT_METHODS: RpcMethod[] = [
   defineMethod({
     name: 'git.status',
-    params: WorktreeSelector,
-    handler: async (params, { runtime }) => runtime.getRuntimeGitStatus(params.worktree)
+    params: GitStatusParams,
+    handler: async (params, { runtime }) =>
+      params.includeIgnored === undefined
+        ? runtime.getRuntimeGitStatus(params.worktree)
+        : runtime.getRuntimeGitStatus(params.worktree, { includeIgnored: params.includeIgnored })
   }),
   defineMethod({
     name: 'git.conflictOperation',
@@ -137,6 +160,38 @@ export const GIT_METHODS: RpcMethod[] = [
       runtime.commitRuntimeGit(params.worktree, params.message)
   }),
   defineMethod({
+    name: 'git.generateCommitMessage',
+    params: GitGenerateCommitMessage,
+    handler: async (params, { runtime }) => {
+      if (
+        params.commitMessageAi === undefined &&
+        params.agentCmdOverrides === undefined &&
+        params.enableGitHubAttribution === undefined
+      ) {
+        return runtime.generateRuntimeCommitMessage(params.worktree)
+      }
+      return runtime.generateRuntimeCommitMessage(params.worktree, {
+        ...(params.commitMessageAi !== undefined
+          ? { commitMessageAi: params.commitMessageAi as GlobalSettings['commitMessageAi'] }
+          : {}),
+        ...(params.agentCmdOverrides !== undefined
+          ? {
+              agentCmdOverrides: params.agentCmdOverrides as GlobalSettings['agentCmdOverrides']
+            }
+          : {}),
+        ...(params.enableGitHubAttribution !== undefined
+          ? { enableGitHubAttribution: params.enableGitHubAttribution }
+          : {})
+      })
+    }
+  }),
+  defineMethod({
+    name: 'git.cancelGenerateCommitMessage',
+    params: WorktreeSelector,
+    handler: async (params, { runtime }) =>
+      runtime.cancelRuntimeGenerateCommitMessage(params.worktree)
+  }),
+  defineMethod({
     name: 'git.stage',
     params: GitFilePath,
     handler: async (params, { runtime }) =>
@@ -165,6 +220,12 @@ export const GIT_METHODS: RpcMethod[] = [
     params: GitFilePath,
     handler: async (params, { runtime }) =>
       runtime.discardRuntimeGitPath(params.worktree, params.filePath)
+  }),
+  defineMethod({
+    name: 'git.bulkDiscard',
+    params: GitBulkPaths,
+    handler: async (params, { runtime }) =>
+      runtime.bulkDiscardRuntimeGitPaths(params.worktree, params.filePaths)
   }),
   defineMethod({
     name: 'git.remoteFileUrl',

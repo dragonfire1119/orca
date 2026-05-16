@@ -624,6 +624,8 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
         // request keys indefinitely in a long-lived renderer session.
         const nextGitStatusByWorktree = { ...s.gitStatusByWorktree }
         delete nextGitStatusByWorktree[worktreeId]
+        const nextGitIgnoredPathsByWorktree = { ...s.gitIgnoredPathsByWorktree }
+        delete nextGitIgnoredPathsByWorktree[worktreeId]
         const nextGitConflictOperationByWorktree = { ...s.gitConflictOperationByWorktree }
         delete nextGitConflictOperationByWorktree[worktreeId]
         const nextTrackedConflictPathsByWorktree = { ...s.trackedConflictPathsByWorktree }
@@ -717,6 +719,7 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
           editorViewMode: nextEditorViewMode,
           expandedDirs: nextExpandedDirs,
           gitStatusByWorktree: nextGitStatusByWorktree,
+          gitIgnoredPathsByWorktree: nextGitIgnoredPathsByWorktree,
           gitConflictOperationByWorktree: nextGitConflictOperationByWorktree,
           trackedConflictPathsByWorktree: nextTrackedConflictPathsByWorktree,
           gitBranchChangesByWorktree: nextGitBranchChangesByWorktree,
@@ -825,6 +828,34 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
       console.error('Failed to update worktree meta:', err)
       void get().fetchWorktrees(getRepoIdFromWorktreeId(worktreeId))
     }
+  },
+
+  updateWorktreesMeta: async (updatesByWorktreeId) => {
+    if (updatesByWorktreeId.size === 0) {
+      return
+    }
+
+    set((s) => {
+      let nextWorktrees = s.worktreesByRepo
+      for (const [worktreeId, updates] of updatesByWorktreeId) {
+        nextWorktrees = applyWorktreeUpdates(nextWorktrees, worktreeId, updates)
+      }
+      return nextWorktrees === s.worktreesByRepo
+        ? {}
+        : { worktreesByRepo: nextWorktrees, sortEpoch: s.sortEpoch + 1 }
+    })
+
+    const settings = get().settings
+    await Promise.all(
+      Array.from(updatesByWorktreeId, async ([worktreeId, updates]) => {
+        try {
+          await persistWorktreeMeta(settings, worktreeId, updates)
+        } catch (err) {
+          console.error('Failed to update worktree meta:', err)
+          void get().fetchWorktrees(getRepoIdFromWorktreeId(worktreeId))
+        }
+      })
+    )
   },
 
   markWorktreeUnread: (worktreeId) => {
@@ -1331,6 +1362,7 @@ export const createWorktreeSlice: StateCreator<AppState, [], [], WorktreeSlice> 
         activeGroupIdByWorktree: omitByWorktree(s.activeGroupIdByWorktree),
         // Git status caches
         gitStatusByWorktree: omitByWorktree(s.gitStatusByWorktree),
+        gitIgnoredPathsByWorktree: omitByWorktree(s.gitIgnoredPathsByWorktree),
         gitConflictOperationByWorktree: omitByWorktree(s.gitConflictOperationByWorktree),
         trackedConflictPathsByWorktree: omitByWorktree(s.trackedConflictPathsByWorktree),
         gitBranchChangesByWorktree: omitByWorktree(s.gitBranchChangesByWorktree),

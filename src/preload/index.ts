@@ -817,6 +817,15 @@ const api = {
       resolve: boolean
     }): Promise<boolean> => ipcRenderer.invoke('gh:resolveReviewThread', args),
 
+    setPRFileViewed: (args: {
+      repoPath: string
+      repoId?: string
+      prNumber: number
+      pullRequestId: string
+      path: string
+      viewed: boolean
+    }): Promise<boolean> => ipcRenderer.invoke('gh:setPRFileViewed', args),
+
     updatePRTitle: (args: {
       repoPath: string
       repoId?: string
@@ -1131,7 +1140,9 @@ const api = {
       ipcRenderer.invoke('agentHooks:cursorStatus'),
     droidStatus: (): Promise<AgentHookInstallStatus> =>
       ipcRenderer.invoke('agentHooks:droidStatus'),
-    grokStatus: (): Promise<AgentHookInstallStatus> => ipcRenderer.invoke('agentHooks:grokStatus')
+    grokStatus: (): Promise<AgentHookInstallStatus> => ipcRenderer.invoke('agentHooks:grokStatus'),
+    hermesStatus: (): Promise<AgentHookInstallStatus> =>
+      ipcRenderer.invoke('agentHooks:hermesStatus')
   },
 
   agentTrust: {
@@ -1317,6 +1328,9 @@ const api = {
       browserPageId: string
       override: BrowserViewportOverride | null
     }): Promise<boolean> => ipcRenderer.invoke('browser:setViewportOverride', args),
+
+    setAnnotationViewportBridge: (args): Promise<boolean> =>
+      ipcRenderer.invoke('browser:setAnnotationViewportBridge', args),
 
     onGuestLoadFailed: (
       callback: (args: {
@@ -1873,8 +1887,11 @@ const api = {
   },
 
   git: {
-    status: (args: { worktreePath: string; connectionId?: string }): Promise<unknown> =>
-      ipcRenderer.invoke('git:status', args),
+    status: (args: {
+      worktreePath: string
+      connectionId?: string
+      includeIgnored?: boolean
+    }): Promise<unknown> => ipcRenderer.invoke('git:status', args),
     conflictOperation: (args: { worktreePath: string; connectionId?: string }): Promise<unknown> =>
       ipcRenderer.invoke('git:conflictOperation', args),
     diff: (args: {
@@ -2125,6 +2142,17 @@ const api = {
       ipcRenderer.on('ui:switchTerminalTab', listener)
       return () => ipcRenderer.removeListener('ui:switchTerminalTab', listener)
     },
+    onCtrlTabKeyDown: (callback: (data: { shiftKey: boolean }) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, data: { shiftKey: boolean }) =>
+        callback(data)
+      ipcRenderer.on('ui:ctrlTabKeyDown', listener)
+      return () => ipcRenderer.removeListener('ui:ctrlTabKeyDown', listener)
+    },
+    onCtrlTabKeyUp: (callback: () => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent) => callback()
+      ipcRenderer.on('ui:ctrlTabKeyUp', listener)
+      return () => ipcRenderer.removeListener('ui:ctrlTabKeyUp', listener)
+    },
     onToggleStatusBar: (callback: () => void): (() => void) => {
       const listener = (_event: Electron.IpcRendererEvent) => callback()
       ipcRenderer.on('ui:toggleStatusBar', listener)
@@ -2194,6 +2222,7 @@ const api = {
         afterTabId?: string
         command?: string
         title?: string
+        activate?: boolean
       }) => void
     ): (() => void) => {
       const listener = (
@@ -2204,6 +2233,7 @@ const api = {
           afterTabId?: string
           command?: string
           title?: string
+          activate?: boolean
         }
       ) => callback(data)
       ipcRenderer.on('terminal:requestTabCreate', listener)

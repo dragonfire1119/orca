@@ -97,6 +97,7 @@ import {
   getPRComments,
   getIssue,
   resolveReviewThread,
+  setPRFileViewed,
   getWorkItemByOwnerRepo,
   updatePRTitle,
   mergePR,
@@ -218,7 +219,7 @@ import {
   shouldRunSetupForCreate,
   writeIssueCommand
 } from '../hooks'
-import { REPO_COLORS, getDefaultVoiceSettings } from '../../shared/constants'
+import { DEFAULT_REPO_BADGE_COLOR, getDefaultVoiceSettings } from '../../shared/constants'
 import { listRepoWorktrees } from '../repo-worktrees'
 import { createWorktreeSymlinks } from '../ipc/worktree-symlinks'
 import {
@@ -255,6 +256,7 @@ import type { ClaudeRateLimitAccountsState, CodexRateLimitAccountsState } from '
 import type { RateLimitState } from '../../shared/rate-limit-types'
 import type { VoiceSettings } from '../../shared/speech-types'
 import { getSpeechModelManager, getSpeechSttService } from '../speech/speech-runtime-service'
+import type { CommitMessageAgentEnvironmentResolvers } from '../text-generation/commit-message-agent-environment'
 
 type RuntimeAccountServices = {
   claudeAccounts: ClaudeAccountService
@@ -461,6 +463,7 @@ type TerminalWaiter = {
   reject: (error: Error) => void
   timeout: NodeJS.Timeout | null
   pollInterval: NodeJS.Timeout | null
+  abortCleanup: (() => void) | null
 }
 
 type MessageWaiter = {
@@ -846,6 +849,7 @@ export class OrcaRuntimeService {
   private optimisticReconcileTokens = new Map<string, string>()
   private readonly getLocalProviderFn: (() => IPtyProvider) | null
   private accountServices: RuntimeAccountServices | null = null
+  private commitMessageAgentEnv: CommitMessageAgentEnvironmentResolvers | null = null
   private mobileDictation: {
     id: string
     owner: string
@@ -1189,7 +1193,9 @@ export class OrcaRuntimeService {
   )
 
   private readonly gitCommands = new RuntimeGitCommands({
-    resolveRuntimeGitTarget: (selector) => this.resolveRuntimeGitTarget(selector)
+    resolveRuntimeGitTarget: (selector) => this.resolveRuntimeGitTarget(selector),
+    getRuntimeSettings: () => this.requireStore().getSettings() as GlobalSettings,
+    getCommitMessageAgentEnvironment: () => this.commitMessageAgentEnv ?? undefined
   })
 
   getRuntimeGitStatus: RuntimeGitCommands['getRuntimeGitStatus'] =
@@ -1216,6 +1222,10 @@ export class OrcaRuntimeService {
   commitRuntimeGit: RuntimeGitCommands['commitRuntimeGit'] = this.gitCommands.commitRuntimeGit.bind(
     this.gitCommands
   )
+  generateRuntimeCommitMessage: RuntimeGitCommands['generateRuntimeCommitMessage'] =
+    this.gitCommands.generateRuntimeCommitMessage.bind(this.gitCommands)
+  cancelRuntimeGenerateCommitMessage: RuntimeGitCommands['cancelRuntimeGenerateCommitMessage'] =
+    this.gitCommands.cancelRuntimeGenerateCommitMessage.bind(this.gitCommands)
   stageRuntimeGitPath: RuntimeGitCommands['stageRuntimeGitPath'] =
     this.gitCommands.stageRuntimeGitPath.bind(this.gitCommands)
   unstageRuntimeGitPath: RuntimeGitCommands['unstageRuntimeGitPath'] =
@@ -1224,6 +1234,8 @@ export class OrcaRuntimeService {
     this.gitCommands.bulkStageRuntimeGitPaths.bind(this.gitCommands)
   bulkUnstageRuntimeGitPaths: RuntimeGitCommands['bulkUnstageRuntimeGitPaths'] =
     this.gitCommands.bulkUnstageRuntimeGitPaths.bind(this.gitCommands)
+  bulkDiscardRuntimeGitPaths: RuntimeGitCommands['bulkDiscardRuntimeGitPaths'] =
+    this.gitCommands.bulkDiscardRuntimeGitPaths.bind(this.gitCommands)
   discardRuntimeGitPath: RuntimeGitCommands['discardRuntimeGitPath'] =
     this.gitCommands.discardRuntimeGitPath.bind(this.gitCommands)
   getRuntimeGitRemoteFileUrl: RuntimeGitCommands['getRuntimeGitRemoteFileUrl'] =
@@ -1813,6 +1825,12 @@ export class OrcaRuntimeService {
 
   setAccountServices(services: RuntimeAccountServices): void {
     this.accountServices = services
+  }
+
+  setCommitMessageAgentEnvironmentResolvers(
+    resolvers: CommitMessageAgentEnvironmentResolvers
+  ): void {
+    this.commitMessageAgentEnv = resolvers
   }
 
   async startMobileDictation(params: {
@@ -3751,6 +3769,7 @@ export class OrcaRuntimeService {
     options?: {
       condition?: RuntimeTerminalWaitCondition
       timeoutMs?: number
+      signal?: AbortSignal
     }
   ): Promise<RuntimeTerminalWait> {
     const condition = options?.condition ?? 'exit'
@@ -3775,7 +3794,12 @@ export class OrcaRuntimeService {
           resolve,
           reject,
           timeout: null,
-          pollInterval: null
+          pollInterval: null,
+          abortCleanup: null
+        }
+        if (!this.bindTerminalWaiterAbort(waiter, options?.signal)) {
+          reject(new Error('request_aborted'))
+          return
         }
         if (effectiveTimeoutMs > 0) {
           waiter.timeout = setTimeout(() => {
@@ -3832,7 +3856,13 @@ export class OrcaRuntimeService {
         resolve,
         reject,
         timeout: null,
-        pollInterval: null
+        pollInterval: null,
+        abortCleanup: null
+      }
+
+      if (!this.bindTerminalWaiterAbort(waiter, options?.signal)) {
+        reject(new Error('request_aborted'))
+        return
       }
 
       if (effectiveTimeoutMs > 0) {
@@ -4045,7 +4075,7 @@ export class OrcaRuntimeService {
       id: randomUUID(),
       path,
       displayName: getRepoName(path),
-      badgeColor: REPO_COLORS[this.store.getRepos().length % REPO_COLORS.length],
+      badgeColor: DEFAULT_REPO_BADGE_COLOR,
       addedAt: Date.now(),
       kind
     }
@@ -4153,7 +4183,7 @@ export class OrcaRuntimeService {
       id: randomUUID(),
       path: targetPath,
       displayName: trimmedName,
-      badgeColor: REPO_COLORS[this.store.getRepos().length % REPO_COLORS.length],
+      badgeColor: DEFAULT_REPO_BADGE_COLOR,
       addedAt: Date.now(),
       kind: repoKind
     }
@@ -4220,7 +4250,7 @@ export class OrcaRuntimeService {
       id: randomUUID(),
       path: clonePath,
       displayName: getRepoName(clonePath),
-      badgeColor: REPO_COLORS[this.store.getRepos().length % REPO_COLORS.length],
+      badgeColor: DEFAULT_REPO_BADGE_COLOR,
       addedAt: Date.now(),
       kind: 'git'
     }
@@ -4635,6 +4665,19 @@ export class OrcaRuntimeService {
     const repo = await this.resolveRepoSelector(repoSelector)
     this.assertHostIntegrationRepoIsLocal(repo, 'repo_pr_review_thread')
     return resolveReviewThread(repo.path, threadId, resolve)
+  }
+
+  async setRepoPRFileViewed(
+    repoSelector: string,
+    args: {
+      pullRequestId: string
+      path: string
+      viewed: boolean
+    }
+  ): Promise<Awaited<ReturnType<typeof setPRFileViewed>>> {
+    const repo = await this.resolveRepoSelector(repoSelector)
+    this.assertHostIntegrationRepoIsLocal(repo, 'repo_pr_file_viewed')
+    return setPRFileViewed({ repoPath: repo.path, ...args })
   }
 
   async updateRepoPRTitle(
@@ -6071,11 +6114,13 @@ export class OrcaRuntimeService {
       env?: Record<string, string>
       title?: string
       focus?: boolean
+      rendererBacked?: boolean
+      activate?: boolean
       tabId?: string
       leafId?: string
     } = {}
   ): Promise<RuntimeTerminalCreate> {
-    if (opts.focus !== true) {
+    if (opts.focus !== true && opts.rendererBacked !== true) {
       if (!worktreeSelector) {
         throw new Error('MISSING_WORKTREE')
       }
@@ -6186,7 +6231,8 @@ export class OrcaRuntimeService {
         requestId,
         worktreeId,
         command: opts.command,
-        title: opts.title
+        title: opts.title,
+        activate: opts.focus === true || opts.activate === true
       })
     })
 
@@ -8059,7 +8105,7 @@ export class OrcaRuntimeService {
       return
     }
 
-    const unread = this._orchestrationDb.getUnreadMessages(handle)
+    const unread = this._orchestrationDb.getUndeliveredUnreadMessages(handle)
     if (unread.length === 0) {
       return
     }
@@ -8108,6 +8154,25 @@ export class OrcaRuntimeService {
     waiter.resolve(result)
   }
 
+  private bindTerminalWaiterAbort(
+    waiter: TerminalWaiter,
+    signal: AbortSignal | undefined
+  ): boolean {
+    if (!signal) {
+      return true
+    }
+    if (signal.aborted) {
+      return false
+    }
+    const onAbort = (): void => {
+      this.removeWaiter(waiter)
+      waiter.reject(new Error('request_aborted'))
+    }
+    waiter.abortCleanup = () => signal.removeEventListener('abort', onAbort)
+    signal.addEventListener('abort', onAbort, { once: true })
+    return true
+  }
+
   private rejectWaitersForHandle(handle: string, code: string): void {
     const waiters = this.waitersByHandle.get(handle)
     if (!waiters || waiters.size === 0) {
@@ -8131,6 +8196,10 @@ export class OrcaRuntimeService {
     }
     if (waiter.pollInterval) {
       clearInterval(waiter.pollInterval)
+    }
+    if (waiter.abortCleanup) {
+      waiter.abortCleanup()
+      waiter.abortCleanup = null
     }
     const waiters = this.waitersByHandle.get(waiter.handle)
     if (!waiters) {

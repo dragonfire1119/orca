@@ -120,6 +120,8 @@ export const REPO_COLORS = [
   '#ec4899' // pink
 ] as const
 
+export const DEFAULT_REPO_BADGE_COLOR = REPO_COLORS[0]
+
 export function getDefaultNotificationSettings(): NotificationSettings {
   return {
     enabled: true,
@@ -170,8 +172,8 @@ export function getDefaultSettings(homedir: string): GlobalSettings {
     terminalFontFamily: defaultTerminalFontFamily(),
     terminalFontWeight: DEFAULT_TERMINAL_FONT_WEIGHT,
     terminalLineHeight: 1,
-    // Why: VS Code defaults terminal GPU acceleration to "auto": prefer
-    // xterm WebGL for performance, but allow renderer failure to choose DOM.
+    // Why: keep the setting on "auto" so explicit user choices stay available,
+    // but renderer policy maps Linux auto to DOM to avoid GPU glyph corruption.
     terminalGpuAcceleration: 'auto',
     // Why 'auto': when the user has picked a known ligature font we want the
     // feature enabled by default, but we never force it if they pick a font
@@ -182,7 +184,7 @@ export function getDefaultSettings(homedir: string): GlobalSettings {
     terminalCursorBlink: true,
     terminalThemeDark: 'Ghostty Default Style Dark',
     terminalDividerColorDark: '#3f3f46',
-    terminalUseSeparateLightTheme: false,
+    terminalUseSeparateLightTheme: true,
     terminalThemeLight: 'Builtin Tango Light',
     terminalDividerColorLight: '#d4d4d8',
     terminalInactivePaneOpacity: 0.8,
@@ -211,8 +213,10 @@ export function getDefaultSettings(homedir: string): GlobalSettings {
     terminalScrollbackBytes: 10_000_000,
     openLinksInApp: true,
     rightSidebarOpenByDefault: true,
+    showGitIgnoredFiles: true,
     showTitlebarAppName: true,
     showTasksButton: true,
+    ctrlTabOrderMode: 'mru',
     floatingTerminalEnabled: true,
     floatingTerminalDefaultedForAllUsers: true,
     floatingTerminalCwd: '~',
@@ -270,12 +274,12 @@ export function getDefaultSettings(homedir: string): GlobalSettings {
       lastViewByProject: {},
       activeProject: null
     },
-    // Why: opt-in feature — `enabled: false` keeps the Generate button hidden
-    // for existing users until they discover and turn it on in Settings. The
-    // per-agent / per-model maps stay empty until the user activates the
-    // toggle, at which point the pane fills them with the spec defaults.
+    // Why: default-on uses the user's default agent when it supports
+    // non-interactive commit-message generation. Keep agent/model maps empty
+    // so first use follows the default agent's configured default model instead
+    // of freezing a stale choice into new profiles.
     commitMessageAi: {
-      enabled: false,
+      enabled: true,
       agentId: null,
       selectedModelByAgent: {},
       selectedThinkingByModel: {},
@@ -349,6 +353,8 @@ export function getDefaultUIState(): PersistedUIState {
     workspaceStatuses: cloneDefaultWorkspaceStatuses(),
     workspaceBoardOpacity: 1,
     workspaceBoardCompact: false,
+    _workspaceStatusesDefaultOrderMigrated: true,
+    _workspaceStatusesDefaultVisualsMigrated: true,
     statusBarItems: [...DEFAULT_STATUS_BAR_ITEMS],
     statusBarVisible: true,
     dismissedUpdateVersion: null,

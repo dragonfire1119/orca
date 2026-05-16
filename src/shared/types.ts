@@ -284,6 +284,7 @@ export type TabGroupLayoutNode =
 export type TabContentType = 'terminal' | 'editor' | 'diff' | 'conflict-review' | 'browser'
 
 export type WorkspaceVisibleTabType = 'terminal' | 'editor' | 'browser'
+export type CtrlTabOrderMode = 'mru' | 'sequential'
 
 export type Tab = {
   id: string // UUID for terminals, filePath for editors (preserves current convention)
@@ -655,6 +656,8 @@ export type GitHubAssignableUser = {
   avatarUrl: string
 }
 
+export type GitHubPRFileViewedState = 'DISMISSED' | 'VIEWED' | 'UNVIEWED'
+
 export type GitHubWorkItem = {
   id: string
   type: 'issue' | 'pr'
@@ -686,6 +689,8 @@ export type GitHubPRFile = {
   deletions: number
   /** GitHub marks files above its diff size limit as binary-like; we skip content fetches for these. */
   isBinary: boolean
+  /** GitHub's per-viewer review state. DISMISSED means new changes arrived after the file was viewed. */
+  viewerViewedState?: GitHubPRFileViewedState
 }
 
 export type GitHubPRFileContents = {
@@ -714,6 +719,8 @@ export type GitHubWorkItemDetails = {
   /** Only set for PRs. Head/base SHAs used by the Files tab to fetch per-file content. */
   headSha?: string
   baseSha?: string
+  /** GraphQL node ID required by GitHub's file-viewed mutations. Only set for PRs. */
+  pullRequestId?: string
   checks?: PRCheckDetail[]
   files?: GitHubPRFile[]
   participants?: GitHubAssignableUser[]
@@ -1269,7 +1276,7 @@ export type GlobalSettings = {
   terminalFontWeight: number
   terminalLineHeight: number
   /** Mirrors VS Code's terminal.integrated.gpuAcceleration shape.
-   *  - 'auto': try xterm WebGL and fall back to DOM if the renderer fails.
+   *  - 'auto': use DOM on Linux; otherwise try xterm WebGL and fall back to DOM if the renderer fails.
    *  - 'on': always try xterm WebGL.
    *  - 'off': keep terminal rendering on xterm's DOM renderer. */
   terminalGpuAcceleration: 'auto' | 'on' | 'off'
@@ -1338,12 +1345,16 @@ export type GlobalSettings = {
    *  until the user explicitly wants worktree-scoped in-app browsing. */
   openLinksInApp: boolean
   rightSidebarOpenByDefault: boolean
+  showGitIgnoredFiles?: boolean
   /** Whether to show the Orca app name in the titlebar. */
   showTitlebarAppName: boolean
   /** Why: some users do not use the Tasks feature and prefer to keep the
    *  left sidebar free of its button entirely. Hiding the button here also
    *  removes it from keyboard navigation. */
   showTasksButton: boolean
+  /** Controls how Ctrl+Tab chooses the next visible tab. Optional for
+   *  profiles saved before this setting existed; readers default to MRU. */
+  ctrlTabOrderMode?: CtrlTabOrderMode
   /** Why: Floating Terminal is the default global shell surface so users can
    *  reach a terminal outside repo/worktree context immediately. */
   floatingTerminalEnabled: boolean
@@ -1669,7 +1680,7 @@ export type PersistedUIState = {
   lastActiveWorktreeId: string | null
   sidebarWidth: number
   rightSidebarWidth: number
-  groupBy: 'none' | 'repo' | 'pr-status'
+  groupBy: 'flat' | 'none' | 'repo' | 'pr-status'
   showWorkspaceLineage?: boolean
   sortBy: 'name' | 'smart' | 'recent' | 'repo'
   showActiveOnly: boolean
@@ -1687,6 +1698,13 @@ export type PersistedUIState = {
   workspaceStatuses?: WorkspaceStatusDefinition[]
   workspaceBoardOpacity?: number
   workspaceBoardCompact?: boolean
+  /** One-shot migration flag for a short-lived build that persisted the
+   *  default workspace statuses in reverse workflow order. Once stamped,
+   *  user-authored status ordering is never inferred from IDs/labels again. */
+  _workspaceStatusesDefaultOrderMigrated?: boolean
+  /** One-shot migration flag for the old default blue/violet/emerald status
+   *  visuals. Once stamped, valid user-authored colors/icons are preserved. */
+  _workspaceStatusesDefaultVisualsMigrated?: boolean
   statusBarItems: StatusBarItem[]
   statusBarVisible: boolean
   dismissedUpdateVersion: string | null
@@ -1960,6 +1978,7 @@ export type GitStatusResult = {
   // Why: porcelain v2 status already includes upstream/ahead/behind metadata.
   // Folding it in lets refresh polling avoid a second pair of git subprocesses.
   upstreamStatus?: GitUpstreamStatus
+  ignoredPaths?: string[]
 }
 
 // Why: when hasUpstream is false, ahead/behind are placeholder zeros, not a
