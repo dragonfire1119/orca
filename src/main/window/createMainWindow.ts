@@ -60,6 +60,7 @@ type CreateMainWindowOptions = {
    *  latch must be cleared or later window closes will be misclassified as
    *  quit attempts. */
   onQuitAborted?: () => void
+  onRendererProcessGone?: (details: Electron.RenderProcessGoneDetails) => void
 }
 
 export function createMainWindow(
@@ -460,7 +461,10 @@ export function createMainWindow(
   const resetMarkdownEditorFocus = (): void => {
     markdownEditorFocused = false
   }
-  mainWindow.webContents.on('render-process-gone', resetMarkdownEditorFocus)
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    resetMarkdownEditorFocus()
+    opts?.onRendererProcessGone?.(details)
+  })
   mainWindow.webContents.on('destroyed', resetMarkdownEditorFocus)
   mainWindow.webContents.on('did-start-navigation', (_e, _url, _isInPlace, isMainFrame) => {
     if (isMainFrame) {

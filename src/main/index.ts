@@ -5,6 +5,7 @@
 import { grantDirAcl } from './win32-utils'
 import { existsSync } from 'fs'
 import { join } from 'path'
+import os from 'node:os'
 import { app, BrowserWindow, nativeImage, nativeTheme } from 'electron'
 import { electronApp, is } from '@electron-toolkit/utils'
 import * as QRCode from 'qrcode'
@@ -69,6 +70,8 @@ import { setUnreadDockBadgeCount } from './dock/unread-badge'
 import { registerFeatureWallFirstAgentTour } from './feature-wall/first-agent-tour'
 import { AutomationService } from './automations/service'
 import { AgentAwakeService } from './agent-awake-service'
+import { CrashReportStore } from './crash-reporting/crash-report-store'
+import { isCrashReportReason } from '../shared/crash-reporting'
 
 let mainWindow: BrowserWindow | null = null
 /** Whether a manual app.quit() (Cmd+Q, etc.) is in progress. Shared with the
@@ -89,6 +92,7 @@ let rateLimits: RateLimitService | null = null
 let runtimeRpc: OrcaRuntimeRpcServer | null = null
 let starNag: StarNagService | null = null
 let agentAwakeService: AgentAwakeService | null = null
+let crashReports: CrashReportStore | null = null
 let unsubscribeAgentAwakeStatusChanges: (() => void) | null = null
 let disposeFeatureWallFirstAgentTour: (() => void) | null = null
 let watcherShutdownPromise: Promise<void> | null = null
@@ -193,6 +197,7 @@ if (hasSingleInstanceLock) {
   initClaudeUsagePath()
   initCodexUsagePath()
   initOpenCodeUsagePath()
+  crashReports = CrashReportStore.fromUserData()
   enableMainProcessGpuFeatures()
 }
 
@@ -253,6 +258,11 @@ function openMainWindow(): BrowserWindow {
     getIsQuitting: () => isQuitting,
     onQuitAborted: () => {
       isQuitting = false
+    },
+    onRendererProcessGone: (details) => {
+      recordProcessGoneCrash('renderer', 'renderer', details.reason, details.exitCode ?? null, {
+        processType: 'renderer'
+      })
     }
   })
 
@@ -291,7 +301,8 @@ function openMainWindow(): BrowserWindow {
           : null,
       prepareForClaudeLaunch: () => claudeRuntimeAuth!.prepareForClaudeLaunch()
     },
-    agentAwakeService ?? undefined
+    agentAwakeService ?? undefined,
+    crashReports ?? undefined
   )
   automations.setWebContents(window.webContents)
   automations.start()
@@ -376,6 +387,49 @@ function sendOpenFeatureTour(targetWindow?: BrowserWindow | null): void {
   const webContents =
     targetWindow && !targetWindow.isDestroyed() ? targetWindow.webContents : mainWindow?.webContents
   webContents?.send('ui:openFeatureTour')
+}
+
+function sendOpenCrashReport(targetWindow?: BrowserWindow | null): void {
+  const webContents =
+    targetWindow && !targetWindow.isDestroyed() ? targetWindow.webContents : mainWindow?.webContents
+  webContents?.send('ui:openCrashReport')
+}
+
+const recentCrashKeys = new Map<string, number>()
+
+function recordProcessGoneCrash(
+  source: 'renderer' | 'child',
+  processType: string,
+  reason: string,
+  exitCode: number | null,
+  details: Record<string, unknown>
+): void {
+  if (!crashReports || !isCrashReportReason(reason)) {
+    return
+  }
+  const key = `${processType}:${reason}:${exitCode ?? 'null'}`
+  const now = Date.now()
+  if (now - (recentCrashKeys.get(key) ?? 0) < 2_000) {
+    return
+  }
+  recentCrashKeys.set(key, now)
+  void crashReports
+    .record({
+      source,
+      processType,
+      reason,
+      exitCode,
+      appVersion: app.getVersion(),
+      platform: process.platform,
+      osRelease: os.release(),
+      arch: process.arch,
+      electronVersion: process.versions.electron,
+      chromeVersion: process.versions.chrome,
+      details
+    })
+    .catch((error) => {
+      console.error('[crash-reporting] Failed to persist crash report:', error)
+    })
 }
 
 function shutdownWatchersOnce(): Promise<void> {
@@ -725,10 +779,22 @@ app.whenReady().then(async () => {
     ['grok', () => grokHookService.install()]
   ])
 
+  app.on('child-process-gone', (_event, details) => {
+    recordProcessGoneCrash('child', details.type, details.reason, details.exitCode ?? null, {
+      name: details.name,
+      serviceName: details.serviceName,
+      type: details.type
+    })
+  })
+
   registerAppMenu({
     onCheckForUpdates: (options) => checkForUpdatesFromMenu(options),
     onOpenSettings: () => {
       mainWindow?.webContents.send('ui:openSettings')
+    },
+    onOpenCrashReport: (targetWindow) => {
+      const targetBrowserWindow = targetWindow instanceof BrowserWindow ? targetWindow : null
+      sendOpenCrashReport(targetBrowserWindow)
     },
     onOpenFeatureTour: (targetWindow) => {
       // Why: menu clicks provide the BrowserWindow that invoked the item. Use it

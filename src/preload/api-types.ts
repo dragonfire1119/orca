@@ -159,6 +159,11 @@ import type {
 } from '../shared/runtime-types'
 import type { ShellOpenLocalPathResult } from '../shared/shell-open-types'
 import type { SkillDiscoveryResult } from '../shared/skills'
+import type {
+  CrashReportRecord,
+  CrashReportSubmitArgs,
+  CrashReportSubmitResult
+} from '../shared/crash-reporting'
 
 export type { ShellOpenLocalPathResult } from '../shared/shell-open-types'
 
@@ -686,6 +691,14 @@ export type PreloadApi = {
       githubLogin: string | null
       githubEmail: string | null
     }) => Promise<{ ok: true } | { ok: false; status: number | null; error: string }>
+  }
+  crashReports: {
+    getLatestPending: () => Promise<CrashReportRecord | null>
+    dismiss: (args: { reportId: string }) => Promise<CrashReportRecord | null>
+    copyLatestDiagnostics: (args?: {
+      reportId?: string
+    }) => Promise<{ ok: true } | { ok: false; error: string }>
+    submit: (args: CrashReportSubmitArgs) => Promise<CrashReportSubmitResult>
   }
   export: ExportApi
   gh: {
@@ -1409,6 +1422,7 @@ export type PreloadApi = {
     set: (args: Partial<PersistedUIState>) => Promise<void>
     onOpenSettings: (callback: () => void) => () => void
     onOpenFeatureTour: (callback: () => void) => () => void
+    onOpenCrashReport: (callback: () => void) => () => void
     onShowFeatureTourNudge: (callback: () => void) => () => void
     onToggleLeftSidebar: (callback: () => void) => () => void
     onToggleRightSidebar: (callback: () => void) => () => void

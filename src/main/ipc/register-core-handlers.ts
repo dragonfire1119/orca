@@ -17,6 +17,7 @@ import { registerGitLabHandlers } from './gitlab'
 import { registerHostedReviewHandlers } from './hosted-review'
 import { registerLinearHandlers } from './linear'
 import { registerFeedbackHandlers } from './feedback'
+import { registerCrashReportingHandlers } from './crash-reporting'
 import { registerExportHandlers } from './export'
 import { registerStatsHandlers } from './stats'
 import { registerMemoryHandlers } from './memory'
@@ -58,6 +59,7 @@ import type { CodexAccountService } from '../codex-accounts/service'
 import type { ClaudeAccountService } from '../claude-accounts/service'
 import type { AutomationService } from '../automations/service'
 import type { AgentAwakeService } from '../agent-awake-service'
+import type { CrashReportStore } from '../crash-reporting/crash-report-store'
 
 let registered = false
 
@@ -74,7 +76,8 @@ export function registerCoreHandlers(
   mainWindowWebContentsId: number | null = null,
   automations?: AutomationService,
   commitMessageAgentEnv?: CommitMessageAgentEnvironmentResolvers,
-  agentAwakeService?: AgentAwakeService
+  agentAwakeService?: AgentAwakeService,
+  crashReports?: CrashReportStore
 ): void {
   // Why: on macOS the app can stay alive after all windows close, then
   // openMainWindow() is called again on 'activate'. ipcMain.handle() throws
@@ -103,6 +106,9 @@ export function registerCoreHandlers(
   registerHostedReviewHandlers(store, stats)
   registerLinearHandlers()
   registerFeedbackHandlers()
+  if (crashReports) {
+    registerCrashReportingHandlers(crashReports)
+  }
   registerExportHandlers()
   registerStatsHandlers(stats)
   registerMemoryHandlers(store)
