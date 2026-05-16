@@ -44,6 +44,14 @@ function WorkspaceKanbanCard({
   onContextMenuSelect,
   onStartRenameGroup
 }: WorkspaceKanbanCardProps): React.JSX.Element {
+  const workspaceGroups = useAppStore((s) => s.workspaceGroups)
+  const groupColor = useMemo(() => {
+    if (!worktree.workspaceGroupId) {
+      return undefined
+    }
+    return workspaceGroups.find((g) => g.id === worktree.workspaceGroupId)?.color
+  }, [worktree.workspaceGroupId, workspaceGroups])
+
   if (compact) {
     return (
       <WorkspaceKanbanCompactCard
@@ -88,6 +96,7 @@ function WorkspaceKanbanCard({
         isMultiSelected={isSelected}
         selectedWorktrees={contextWorktrees}
         nativeDragEnabled={nativeDragEnabled}
+        groupColor={groupColor}
         onActivate={onActivate}
         onSelectionGesture={onSelectionGesture}
         onContextMenuSelect={(event) => onContextMenuSelect(event, worktree)}
