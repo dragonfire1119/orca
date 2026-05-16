@@ -13,6 +13,7 @@ import type {
   TaskViewPresetId,
   TuiAgent,
   UpdateStatus,
+  WorkspaceGroup,
   WorkspaceStatusDefinition,
   WorktreeCardProperty
 } from '../../../../shared/types'
@@ -38,6 +39,7 @@ import {
   normalizeWorkspaceBoardCompact,
   normalizeWorkspaceStatuses
 } from '../../../../shared/workspace-statuses'
+import { normalizeWorkspaceGroups } from '../../../../shared/workspace-groups'
 import { normalizeKagiSessionLink } from '../../../../shared/browser-url'
 import type { OrcaHookScriptKind } from '../../lib/orca-hook-trust'
 import { DEFAULT_PET_ID, isBundledPetId } from '../../components/pet/pet-models'
@@ -370,6 +372,8 @@ export type UISlice = {
   toggleWorktreeCardProperty: (prop: WorktreeCardProperty) => void
   workspaceStatuses: WorkspaceStatusDefinition[]
   setWorkspaceStatuses: (statuses: WorkspaceStatusDefinition[]) => void
+  workspaceGroups: WorkspaceGroup[]
+  setWorkspaceGroups: (groups: WorkspaceGroup[]) => void
   workspaceBoardOpacity: number
   setWorkspaceBoardOpacity: (opacity: number) => void
   workspaceBoardCompact: boolean
@@ -779,6 +783,13 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
     set({ workspaceStatuses: normalized })
   },
 
+  workspaceGroups: [],
+  setWorkspaceGroups: (groups) => {
+    const normalized = normalizeWorkspaceGroups(groups)
+    window.api.ui.set({ workspaceGroups: normalized }).catch(console.error)
+    set({ workspaceGroups: normalized })
+  },
+
   workspaceBoardOpacity: 1,
   setWorkspaceBoardOpacity: (opacity) => {
     const clamped = clampWorkspaceBoardOpacity(opacity)
@@ -940,6 +951,7 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set, get)
         editorFontZoomLevel: ui.editorFontZoomLevel ?? 0,
         worktreeCardProperties: ui.worktreeCardProperties ?? [...DEFAULT_WORKTREE_CARD_PROPERTIES],
         workspaceStatuses: normalizeWorkspaceStatuses(ui.workspaceStatuses),
+        workspaceGroups: normalizeWorkspaceGroups(ui.workspaceGroups),
         workspaceBoardOpacity: clampWorkspaceBoardOpacity(ui.workspaceBoardOpacity),
         workspaceBoardCompact: normalizeWorkspaceBoardCompact(ui.workspaceBoardCompact),
         workspaceBoardColumnWidth: clampWorkspaceBoardColumnWidth(ui.workspaceBoardColumnWidth),
