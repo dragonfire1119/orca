@@ -30,7 +30,8 @@ import type {
   Repo,
   IssueInfo,
   LinearIssue,
-  WorkspaceGroupColor
+  WorkspaceGroupColor,
+  WorkspaceGroupId
 } from '../../../../shared/types'
 import { branchDisplayName, CONFLICT_OPERATION_LABELS, FilledBellIcon } from './WorktreeCardHelpers'
 import {
@@ -61,6 +62,7 @@ type WorktreeCardProps = {
   onSelectionGesture?: (event: React.MouseEvent<HTMLElement>, worktreeId: string) => boolean
   onContextMenuSelect?: (event: React.MouseEvent<HTMLElement>) => readonly Worktree[]
   nativeDragEnabled?: boolean
+  onStartRenameGroup?: (groupId: WorkspaceGroupId) => void
 }
 
 function formatSparseDirectoryPreview(directories: string[]): string {
@@ -79,6 +81,7 @@ const WorktreeCard = React.memo(function WorktreeCard({
   onSelectionGesture,
   onContextMenuSelect,
   nativeDragEnabled = true,
+  onStartRenameGroup,
   hideRepoBadge,
   parentLabel,
   lineageState,
@@ -679,6 +682,7 @@ const WorktreeCard = React.memo(function WorktreeCard({
         worktree={worktree}
         selectedWorktrees={selectedWorktrees}
         onContextMenuSelect={onContextMenuSelect}
+        onStartRenameGroup={onStartRenameGroup}
       >
         {hasDetails ? (
           <WorktreeCardDetailsHover

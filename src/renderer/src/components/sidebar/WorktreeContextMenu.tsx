@@ -17,6 +17,9 @@ import {
   Copy,
   Bell,
   BellOff,
+  FolderPlus,
+  Link,
+  MessageSquare,
   Moon,
   Pencil,
   Pin,
@@ -24,20 +27,27 @@ import {
   Kanban,
   Trash2,
   Unlink,
+  Users,
   Workflow
 } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { useRepoById, useRepoMap, useWorktreeMap } from '@/store/selectors'
 import { cn } from '@/lib/utils'
-import type { Worktree } from '../../../../shared/types'
+import type { Worktree, WorkspaceGroupId } from '../../../../shared/types'
 import { isFolderRepo } from '../../../../shared/repo-kind'
 import { runWorktreeBatchDelete, runWorktreeDelete } from './delete-worktree-flow'
 import { runSleepWorktrees } from './sleep-worktree-flow'
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import { VIRTUALIZED_SCROLL_ANCHOR_RECORD_EVENT } from '@/hooks/useVirtualizedScrollAnchor'
 import { getLineageRenderInfo } from './worktree-list-groups'
-import { getWorkspaceStatus, getWorkspaceStatusVisualMeta } from './workspace-status'
+import {
+  getWorkspaceGroupSwatchClass,
+  getWorkspaceStatus,
+  getWorkspaceStatusVisualMeta
+} from './workspace-status'
 import { WorktreeOpenInSubMenu } from './WorktreeOpenInMenu'
+import { buildNewGroupFromCreate } from './workspace-group-actions'
+import { pickAutoCycledColor } from '../../../../shared/workspace-groups'
 
 type Props = {
   worktree: Worktree
@@ -45,6 +55,7 @@ type Props = {
   contentClassName?: string
   selectedWorktrees?: readonly Worktree[]
   onContextMenuSelect?: (event: React.MouseEvent<HTMLElement>) => readonly Worktree[]
+  onStartRenameGroup?: (groupId: WorkspaceGroupId) => void
 }
 
 const CLOSE_ALL_CONTEXT_MENUS_EVENT = 'orca-close-all-context-menus'
@@ -141,10 +152,13 @@ const WorktreeContextMenu = React.memo(function WorktreeContextMenu({
   children,
   contentClassName,
   selectedWorktrees = [worktree],
-  onContextMenuSelect
+  onContextMenuSelect,
+  onStartRenameGroup
 }: Props) {
   const updateWorktreeMeta = useAppStore((s) => s.updateWorktreeMeta)
   const workspaceStatuses = useAppStore((s) => s.workspaceStatuses)
+  const workspaceGroups = useAppStore((s) => s.workspaceGroups)
+  const setWorkspaceGroups = useAppStore((s) => s.setWorkspaceGroups)
   const openModal = useAppStore((s) => s.openModal)
   const repo = useRepoById(worktree.repoId)
   const deleteState = useAppStore((s) => s.deleteStateByWorktreeId[worktree.id])
@@ -332,6 +346,64 @@ const WorktreeContextMenu = React.memo(function WorktreeContextMenu({
     )
   }, [activeContextWorktrees, updateWorktreeLineage])
 
+  const allGroupedInContext = useMemo(
+    () => activeContextWorktrees.every((item) => item.workspaceGroupId),
+    [activeContextWorktrees]
+  )
+  const anyUngroupedInContext = useMemo(
+    () => activeContextWorktrees.some((item) => !item.workspaceGroupId),
+    [activeContextWorktrees]
+  )
+
+  const handleAssignToGroup = useCallback(
+    (groupId: WorkspaceGroupId) => {
+      setMenuOpen(false)
+      void Promise.all(
+        activeContextWorktrees.map((item) =>
+          item.workspaceGroupId === groupId
+            ? Promise.resolve()
+            : updateWorktreeMeta(item.id, { workspaceGroupId: groupId })
+        )
+      )
+    },
+    [activeContextWorktrees, updateWorktreeMeta]
+  )
+
+  const handleRemoveFromGroup = useCallback(() => {
+    setMenuOpen(false)
+    void Promise.all(
+      activeContextWorktrees.map((item) =>
+        item.workspaceGroupId
+          ? updateWorktreeMeta(item.id, { workspaceGroupId: null })
+          : Promise.resolve()
+      )
+    )
+  }, [activeContextWorktrees, updateWorktreeMeta])
+
+  const handleCreateNewGroup = useCallback(() => {
+    setMenuOpen(false)
+    const existingColors = workspaceGroups.map((g) => g.color)
+    const autoColor = pickAutoCycledColor(existingColors)
+    const { groups, newGroup } = buildNewGroupFromCreate({
+      existing: workspaceGroups,
+      name: 'New group',
+      autoColor
+    })
+    setWorkspaceGroups(groups)
+    void Promise.all(
+      activeContextWorktrees.map((item) =>
+        updateWorktreeMeta(item.id, { workspaceGroupId: newGroup.id })
+      )
+    )
+    onStartRenameGroup?.(newGroup.id)
+  }, [
+    activeContextWorktrees,
+    onStartRenameGroup,
+    setWorkspaceGroups,
+    updateWorktreeMeta,
+    workspaceGroups
+  ])
+
   const suppressOpeningPointerEvent = useCallback((event: React.SyntheticEvent) => {
     const contextMenuOpenedAt = contextMenuOpenedAtRef.current
     if (
@@ -486,6 +558,37 @@ const WorktreeContextMenu = React.memo(function WorktreeContextMenu({
             <DropdownMenuItem onSelect={handleRename} disabled={isDeleting}>
               <Pencil className="size-3.5" />
               Update
+            </DropdownMenuItem>
+          )}
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger disabled={deletingContext}>
+              <Users className="size-3.5" />
+              {anyUngroupedInContext ? 'Add to group' : 'Move to group'}
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="w-48">
+              {workspaceGroups.map((group) => (
+                <DropdownMenuItem key={group.id} onSelect={() => handleAssignToGroup(group.id)}>
+                  <span
+                    aria-hidden
+                    className={cn(
+                      'inline-block w-2 h-2 rounded-full mr-2',
+                      getWorkspaceGroupSwatchClass(group.color)
+                    )}
+                  />
+                  {group.name}
+                </DropdownMenuItem>
+              ))}
+              {workspaceGroups.length > 0 && <DropdownMenuSeparator />}
+              <DropdownMenuItem onSelect={handleCreateNewGroup}>
+                <FolderPlus className="size-3.5" />
+                New group…
+              </DropdownMenuItem>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+          {allGroupedInContext && activeContextWorktrees.length > 0 && (
+            <DropdownMenuItem onSelect={handleRemoveFromGroup} disabled={deletingContext}>
+              <Users className="size-3.5" />
+              Remove from group
             </DropdownMenuItem>
           )}
           <DropdownMenuSeparator />

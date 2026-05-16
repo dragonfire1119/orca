@@ -7,7 +7,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import { getWorktreeStatusLabel } from '@/lib/worktree-status'
 import { cn } from '@/lib/utils'
-import type { Repo, Worktree } from '../../../../shared/types'
+import type { Repo, Worktree, WorkspaceGroupId } from '../../../../shared/types'
 import StatusIndicator from './StatusIndicator'
 import WorktreeCard from './WorktreeCard'
 import WorktreeContextMenu from './WorktreeContextMenu'
@@ -28,6 +28,7 @@ type WorkspaceKanbanCardProps = {
     event: React.MouseEvent<HTMLElement>,
     worktree: Worktree
   ) => readonly Worktree[]
+  onStartRenameGroup?: (groupId: WorkspaceGroupId) => void
 }
 
 function WorkspaceKanbanCard({
@@ -40,7 +41,8 @@ function WorkspaceKanbanCard({
   nativeDragEnabled = true,
   onActivate,
   onSelectionGesture,
-  onContextMenuSelect
+  onContextMenuSelect,
+  onStartRenameGroup
 }: WorkspaceKanbanCardProps): React.JSX.Element {
   if (compact) {
     return (
@@ -54,6 +56,7 @@ function WorkspaceKanbanCard({
         onSelectionGesture={onSelectionGesture}
         onContextMenuSelect={onContextMenuSelect}
         nativeDragEnabled={nativeDragEnabled}
+        onStartRenameGroup={onStartRenameGroup}
       />
     )
   }
@@ -88,6 +91,7 @@ function WorkspaceKanbanCard({
         onActivate={onActivate}
         onSelectionGesture={onSelectionGesture}
         onContextMenuSelect={(event) => onContextMenuSelect(event, worktree)}
+        onStartRenameGroup={onStartRenameGroup}
       />
     </div>
   )
@@ -104,7 +108,8 @@ function WorkspaceKanbanCompactCard({
   nativeDragEnabled = true,
   onActivate,
   onSelectionGesture,
-  onContextMenuSelect
+  onContextMenuSelect,
+  onStartRenameGroup
 }: Omit<WorkspaceKanbanCardProps, 'compact'>): React.JSX.Element {
   const deleteState = useAppStore((s) => s.deleteStateByWorktreeId[worktree.id])
   const isDeleting = deleteState?.isDeleting ?? false
@@ -158,6 +163,7 @@ function WorkspaceKanbanCompactCard({
       worktree={worktree}
       selectedWorktrees={contextWorktrees}
       onContextMenuSelect={(event) => onContextMenuSelect(event, worktree)}
+      onStartRenameGroup={onStartRenameGroup}
     >
       <HoverCard openDelay={450} closeDelay={100}>
         <HoverCardTrigger asChild>

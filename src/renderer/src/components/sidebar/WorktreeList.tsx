@@ -29,6 +29,7 @@ import type {
   Repo,
   WorktreeLineage,
   WorkspaceGroup,
+  WorkspaceGroupColor,
   WorkspaceGroupId,
   WorkspaceStatus,
   WorkspaceStatusDefinition
@@ -83,7 +84,12 @@ import {
 import { branchDisplayName } from './WorktreeCardHelpers'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import { GroupHeaderRow } from './GroupHeaderRow'
-import { buildRenameGroup } from './workspace-group-actions'
+import {
+  buildRecolorGroup,
+  buildRenameGroup,
+  buildReorderHeaders,
+  buildUngroupChanges
+} from './workspace-group-actions'
 import { useWorkspaceGroupDrop } from './use-workspace-group-drop'
 
 // How long to wait after a sortEpoch bump before actually re-sorting.
@@ -179,7 +185,11 @@ type VirtualizedWorktreeViewportProps = {
   onToggleGroupCollapsed: (groupId: WorkspaceGroupId) => void
   onGroupRenameCommit: (groupId: WorkspaceGroupId, name: string) => void
   onGroupRenameCancel: (groupId: WorkspaceGroupId) => void
-  onGroupHeaderContextMenu: (groupId: WorkspaceGroupId, e: React.MouseEvent) => void
+  onGroupStartRename: (groupId: WorkspaceGroupId) => void
+  onGroupRecolor: (groupId: WorkspaceGroupId, color: WorkspaceGroupColor) => void
+  onGroupReorder: (groupId: WorkspaceGroupId, direction: 'up' | 'down') => void
+  onGroupUngroup: (groupId: WorkspaceGroupId) => void
+  onStartRenameGroup: (groupId: WorkspaceGroupId) => void
   onMoveWorktreeToStatus: (worktreeId: string, status: WorkspaceStatus) => void
   onMoveWorktreesToStatus: (worktreeIds: readonly string[], status: WorkspaceStatus) => void
   onPinWorktree: (worktreeId: string) => void
@@ -290,7 +300,10 @@ type GroupHeaderRowDropTargetProps = {
   onToggleGroupCollapsed: (groupId: WorkspaceGroupId) => void
   onGroupRenameCommit: (groupId: WorkspaceGroupId, name: string) => void
   onGroupRenameCancel: (groupId: WorkspaceGroupId) => void
-  onGroupHeaderContextMenu: (groupId: WorkspaceGroupId, e: React.MouseEvent) => void
+  onGroupStartRename: (groupId: WorkspaceGroupId) => void
+  onGroupRecolor: (groupId: WorkspaceGroupId, color: WorkspaceGroupColor) => void
+  onGroupReorder: (groupId: WorkspaceGroupId, direction: 'up' | 'down') => void
+  onGroupUngroup: (groupId: WorkspaceGroupId) => void
 }
 
 function GroupHeaderRowDropTarget({
@@ -300,7 +313,10 @@ function GroupHeaderRowDropTarget({
   onToggleGroupCollapsed,
   onGroupRenameCommit,
   onGroupRenameCancel,
-  onGroupHeaderContextMenu
+  onGroupStartRename,
+  onGroupRecolor,
+  onGroupReorder,
+  onGroupUngroup
 }: GroupHeaderRowDropTargetProps): React.JSX.Element {
   const groupId = row.workspaceGroupId ?? null
   const drop = useWorkspaceGroupDrop({ onAssign, groupId })
@@ -323,7 +339,10 @@ function GroupHeaderRowDropTarget({
           onToggleCollapsed={onToggleGroupCollapsed}
           onRenameCommit={onGroupRenameCommit}
           onRenameCancel={onGroupRenameCancel}
-          onContextMenu={onGroupHeaderContextMenu}
+          onStartRename={onGroupStartRename}
+          onRecolor={onGroupRecolor}
+          onReorder={onGroupReorder}
+          onUngroup={onGroupUngroup}
         />
       </div>
     )
@@ -373,7 +392,11 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   onToggleGroupCollapsed,
   onGroupRenameCommit,
   onGroupRenameCancel,
-  onGroupHeaderContextMenu,
+  onGroupStartRename,
+  onGroupRecolor,
+  onGroupReorder,
+  onGroupUngroup,
+  onStartRenameGroup,
   onMoveWorktreeToStatus,
   onMoveWorktreesToStatus,
   onPinWorktree,
@@ -949,7 +972,10 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                   onToggleGroupCollapsed={onToggleGroupCollapsed}
                   onGroupRenameCommit={onGroupRenameCommit}
                   onGroupRenameCancel={onGroupRenameCancel}
-                  onGroupHeaderContextMenu={onGroupHeaderContextMenu}
+                  onGroupStartRename={onGroupStartRename}
+                  onGroupRecolor={onGroupRecolor}
+                  onGroupReorder={onGroupReorder}
+                  onGroupUngroup={onGroupUngroup}
                 />
               </div>
             )
@@ -1234,6 +1260,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                   worktree={child.worktree}
                   selectedWorktrees={selectedWorktrees}
                   onContextMenuSelect={(event) => onContextMenuSelect(event, child.worktree)}
+                  onStartRenameGroup={onStartRenameGroup}
                 >
                   <div
                     id={getWorktreeOptionId(child.worktree.id)}
@@ -1928,9 +1955,52 @@ const WorktreeList = React.memo(function WorktreeList({
     setRenamingGroupId(null)
   }, [])
 
-  const handleGroupHeaderContextMenu = useCallback(
-    (_groupId: WorkspaceGroupId, _e: React.MouseEvent) => {},
+  const handleGroupStartRename = useCallback(
+    (groupId: WorkspaceGroupId) => setRenamingGroupId(groupId),
     []
+  )
+
+  const handleGroupRecolor = useCallback(
+    (groupId: WorkspaceGroupId, color: WorkspaceGroupColor) => {
+      setWorkspaceGroups(buildRecolorGroup({ existing: workspaceGroups, groupId, color }))
+    },
+    [workspaceGroups, setWorkspaceGroups]
+  )
+
+  const handleGroupReorder = useCallback(
+    (groupId: WorkspaceGroupId, direction: 'up' | 'down') => {
+      const order = [...workspaceGroups].sort((a, b) => a.sortOrder - b.sortOrder).map((g) => g.id)
+      const idx = order.indexOf(groupId)
+      if (idx < 0) {
+        return
+      }
+      const swap = direction === 'up' ? idx - 1 : idx + 1
+      if (swap < 0 || swap >= order.length) {
+        return
+      }
+      const reordered = [...order]
+      const tmp = reordered[idx]!
+      reordered[idx] = reordered[swap]!
+      reordered[swap] = tmp
+      setWorkspaceGroups(buildReorderHeaders({ existing: workspaceGroups, orderedIds: reordered }))
+    },
+    [workspaceGroups, setWorkspaceGroups]
+  )
+
+  const handleGroupUngroup = useCallback(
+    (groupId: WorkspaceGroupId) => {
+      const memberIds = worktrees.filter((w) => w.workspaceGroupId === groupId).map((w) => w.id)
+      const { groups, updates } = buildUngroupChanges({
+        existing: workspaceGroups,
+        groupId,
+        memberWorktreeIds: memberIds
+      })
+      setWorkspaceGroups(groups)
+      for (const u of updates) {
+        void updateWorktreeMeta(u.worktreeId, { workspaceGroupId: u.workspaceGroupId })
+      }
+    },
+    [worktrees, workspaceGroups, setWorkspaceGroups, updateWorktreeMeta]
   )
 
   const handleAssignDrop = useCallback(
@@ -2078,7 +2148,11 @@ const WorktreeList = React.memo(function WorktreeList({
       onToggleGroupCollapsed={handleToggleGroupCollapsed}
       onGroupRenameCommit={handleGroupRenameCommit}
       onGroupRenameCancel={handleGroupRenameCancel}
-      onGroupHeaderContextMenu={handleGroupHeaderContextMenu}
+      onGroupStartRename={handleGroupStartRename}
+      onGroupRecolor={handleGroupRecolor}
+      onGroupReorder={handleGroupReorder}
+      onGroupUngroup={handleGroupUngroup}
+      onStartRenameGroup={handleGroupStartRename}
       onMoveWorktreeToStatus={moveWorktreeToStatus}
       onMoveWorktreesToStatus={moveWorktreesToStatus}
       onPinWorktree={pinWorktree}
