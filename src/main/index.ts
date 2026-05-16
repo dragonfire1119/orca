@@ -70,6 +70,10 @@ import { setUnreadDockBadgeCount } from './dock/unread-badge'
 import { registerFeatureWallFirstAgentTour } from './feature-wall/first-agent-tour'
 import { AutomationService } from './automations/service'
 import { AgentAwakeService } from './agent-awake-service'
+import {
+  getCrashBreadcrumbSnapshot,
+  recordCrashBreadcrumb
+} from './crash-reporting/crash-breadcrumb-store'
 import { CrashReportStore } from './crash-reporting/crash-report-store'
 import { isCrashReportReason } from '../shared/crash-reporting'
 
@@ -198,6 +202,10 @@ if (hasSingleInstanceLock) {
   initCodexUsagePath()
   initOpenCodeUsagePath()
   crashReports = CrashReportStore.fromUserData()
+  recordCrashBreadcrumb('app_started', {
+    packaged: app.isPackaged,
+    platform: process.platform
+  })
   enableMainProcessGpuFeatures()
 }
 
@@ -265,12 +273,14 @@ function openMainWindow(): BrowserWindow {
       })
     }
   })
+  recordCrashBreadcrumb('main_window_created')
 
   // Why: telemetry-plan.md§First-launch experience anchors default-on
   // `app_opened` to the first main-window load. Existing users in the
   // pending-banner cohort resolve through telemetry/client.ts; this load
   // path only fires once consent is already enabled.
   const onFirstWindowLoad = (): void => {
+    recordCrashBreadcrumb('main_window_loaded')
     if (!store) {
       return
     }
@@ -354,6 +364,10 @@ function openMainWindow(): BrowserWindow {
         receivedAt,
         stateStartedAt
       })
+      recordCrashBreadcrumb('agent_state_changed', {
+        agentType: payload.agentType ?? 'unknown',
+        state: payload.state
+      })
       // Why: cursor-agent's OSC title stays "Cursor Agent" for the whole turn,
       // and opencode's stays bare "OpenCode" — neither carries a working/idle
       // signal the title heuristic can read. Synthesize an OSC title update
@@ -425,7 +439,10 @@ function recordProcessGoneCrash(
       arch: process.arch,
       electronVersion: process.versions.electron,
       chromeVersion: process.versions.chrome,
-      details
+      details,
+      // Why: breadcrumbs stay memory-only during normal operation. Persist a
+      // snapshot only after Electron reports a crash-like process exit.
+      breadcrumbs: getCrashBreadcrumbSnapshot()
     })
     .catch((error) => {
       console.error('[crash-reporting] Failed to persist crash report:', error)
@@ -790,13 +807,16 @@ app.whenReady().then(async () => {
   registerAppMenu({
     onCheckForUpdates: (options) => checkForUpdatesFromMenu(options),
     onOpenSettings: () => {
+      recordCrashBreadcrumb('settings_opened')
       mainWindow?.webContents.send('ui:openSettings')
     },
     onOpenCrashReport: (targetWindow) => {
+      recordCrashBreadcrumb('crash_report_opened')
       const targetBrowserWindow = targetWindow instanceof BrowserWindow ? targetWindow : null
       sendOpenCrashReport(targetBrowserWindow)
     },
     onOpenFeatureTour: (targetWindow) => {
+      recordCrashBreadcrumb('feature_tour_opened')
       // Why: menu clicks provide the BrowserWindow that invoked the item. Use it
       // first so hidden/headless E2E windows and future multi-window flows route
       // the tour to the correct renderer instead of relying on global focus.

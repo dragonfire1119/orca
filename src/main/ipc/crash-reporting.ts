@@ -14,9 +14,12 @@ export function registerCrashReportingHandlers(store: CrashReportStore): void {
   ipcMain.handle('crashReports:getLatestPending', () => store.getLatestPending())
 
   ipcMain.removeHandler('crashReports:dismiss')
-  ipcMain.handle('crashReports:dismiss', async (_event, args: { reportId: string }) =>
-    store.dismiss(args.reportId)
-  )
+  ipcMain.handle('crashReports:dismiss', async (_event, args: { reportId: string }) => {
+    if (inFlightSubmissions.has(args.reportId)) {
+      return store.getById(args.reportId)
+    }
+    return store.dismiss(args.reportId)
+  })
 
   ipcMain.removeHandler('crashReports:copyLatestDiagnostics')
   ipcMain.handle(

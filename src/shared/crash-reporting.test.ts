@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   formatCrashReportText,
   isCrashReportReason,
+  sanitizeCrashReportBreadcrumbs,
   sanitizeCrashReportDetails,
   sanitizeCrashReportString,
   type CrashReportRecord
@@ -10,10 +11,10 @@ import {
 describe('crash-reporting shared helpers', () => {
   it('redacts paths and common secret-shaped strings', () => {
     const text =
-      'file /Users/alice/project/.env C:\\Users\\bob\\repo token=abc123 ghp_abcdefghijklmnopqrstuvwxyz'
+      'file /Users/alice/My Project/.env /tmp/build log C:\\Users\\bob\\My Project token=abc123 ghp_abcdefghijklmnopqrstuvwxyz'
 
     expect(sanitizeCrashReportString(text)).toBe(
-      'file [redacted-path] [redacted-path] token=[redacted] [redacted-secret]'
+      'file [redacted-path] [redacted-path] [redacted-path] token=[redacted] [redacted-secret]'
     )
   })
 
@@ -32,6 +33,27 @@ describe('crash-reporting shared helpers', () => {
       code: 9,
       crashed: true,
       missing: null
+    })
+  })
+
+  it('sanitizes breadcrumb data and caps to the latest thirty entries', () => {
+    const breadcrumbs = sanitizeCrashReportBreadcrumbs(
+      Array.from({ length: 32 }, (_, index) => ({
+        createdAt: `2026-05-16T01:${String(index).padStart(2, '0')}:00.000Z`,
+        name: `event_${index}`,
+        data: {
+          path: '/Users/alice/project',
+          ok: true,
+          nested: { ignored: true }
+        }
+      }))
+    )
+
+    expect(breadcrumbs).toHaveLength(30)
+    expect(breadcrumbs?.[0].name).toBe('event_2')
+    expect(breadcrumbs?.[0].data).toEqual({
+      path: '[redacted-path]',
+      ok: true
     })
   })
 
@@ -56,12 +78,21 @@ describe('crash-reporting shared helpers', () => {
       arch: 'arm64',
       electronVersion: '41.0.0',
       chromeVersion: '141.0.0',
-      details: { reason: 'native crash' }
+      details: { reason: 'native crash' },
+      breadcrumbs: [
+        {
+          createdAt: '2026-05-16T00:59:30.000Z',
+          name: 'agent_state_changed',
+          data: { agentType: 'codex', state: 'working' }
+        }
+      ]
     }
 
     const text = formatCrashReportText(report, 'saw /Users/me/project')
 
     expect(text).toContain('[Crash Report]')
+    expect(text).toContain('Recent activity:')
+    expect(text).toContain('agent_state_changed')
     expect(text).toContain('User notes:')
     expect(text).toContain('[redacted-path]')
     expect(text).not.toContain('Route:')

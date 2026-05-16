@@ -122,4 +122,40 @@ describe('registerCrashReportingHandlers', () => {
     expect(result).toMatchObject({ ok: false, status: 500, report: latest })
     expect(markSent).not.toHaveBeenCalled()
   })
+
+  it('does not dismiss a report while submission is in flight', async () => {
+    let resolveSubmit: (value: { ok: true }) => void = () => {}
+    submitFeedbackMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolveSubmit = resolve
+      })
+    )
+    const latest = report()
+    const dismiss = vi.fn()
+    registerCrashReportingHandlers({
+      getLatestPending: vi.fn(async () => latest),
+      getById: vi.fn(async () => latest),
+      dismiss,
+      markSent: vi.fn(async () => report('sent')),
+      listRecent: vi.fn(),
+      record: vi.fn(),
+      formatDiagnosticText: vi.fn()
+    } as never)
+
+    const submitPromise = handlers.get('crashReports:submit')?.(null, {
+      reportId: latest.id,
+      githubLogin: null,
+      githubEmail: null
+    })
+    await vi.waitFor(() => expect(submitFeedbackMock).toHaveBeenCalled())
+
+    const dismissResult = await handlers.get('crashReports:dismiss')?.(null, {
+      reportId: latest.id
+    })
+
+    expect(dismissResult).toEqual(latest)
+    expect(dismiss).not.toHaveBeenCalled()
+    resolveSubmit({ ok: true })
+    await expect(submitPromise).resolves.toMatchObject({ ok: true })
+  })
 })

@@ -141,7 +141,15 @@ export function CrashReportDialog(): React.JSX.Element {
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (submitting && !nextOpen) {
+          return
+        }
+        setOpen(nextOpen)
+      }}
+    >
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-sm">
@@ -193,7 +201,13 @@ export function CrashReportDialog(): React.JSX.Element {
             <Clipboard className="size-3.5" />
             Copy Details
           </Button>
-          <Button type="button" variant="ghost" size="sm" onClick={handleDismiss}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={handleDismiss}
+            disabled={submitting}
+          >
             Don&apos;t Send
           </Button>
           <Button type="button" size="sm" onClick={handleSubmit} disabled={!report || submitting}>

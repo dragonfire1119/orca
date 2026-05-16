@@ -5,6 +5,7 @@ import path from 'node:path'
 import { app } from 'electron'
 import {
   formatCrashReportText,
+  sanitizeCrashReportBreadcrumbs,
   sanitizeCrashReportDetails,
   type CrashReportCreateInput,
   type CrashReportRecord,
@@ -33,7 +34,8 @@ export class CrashReportStore {
         id: crypto.randomUUID(),
         createdAt: new Date().toISOString(),
         status: 'pending',
-        details: sanitizeCrashReportDetails(input.details)
+        details: sanitizeCrashReportDetails(input.details),
+        breadcrumbs: sanitizeCrashReportBreadcrumbs(input.breadcrumbs)
       }
       return {
         reports: [report, ...reports].slice(0, MAX_REPORTS),
