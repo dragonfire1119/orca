@@ -23,7 +23,8 @@ const GROUP_BY_OPTIONS = [
   { id: 'none', label: 'None' },
   { id: 'workspace-status', label: 'Status' },
   { id: 'pr-status', label: 'PR' },
-  { id: 'repo', label: 'Repo' }
+  { id: 'repo', label: 'Repo' },
+  { id: 'group', label: 'Group' }
 ] as const
 
 const PROPERTY_OPTIONS: { id: WorktreeCardProperty; label: string }[] = [
