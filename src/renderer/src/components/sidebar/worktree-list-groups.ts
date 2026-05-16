@@ -469,7 +469,7 @@ export function buildRows(
       collapsedGroups,
       workspaceGroups
     })
-    return result
+    return clusterWorkspaceGroupMembers(result, workspaceGroups)
   }
 
   const grouped = new Map<string, { label: string; items: Worktree[]; repo?: Repo }>()
@@ -594,7 +594,68 @@ export function buildRows(
     }
   }
 
-  return result
+  return clusterWorkspaceGroupMembers(result, workspaceGroups)
+}
+
+function clusterWorkspaceGroupMembers(
+  rows: Row[],
+  workspaceGroups: readonly WorkspaceGroup[]
+): Row[] {
+  if (workspaceGroups.length === 0) {
+    return rows
+  }
+  const validIds = new Set(workspaceGroups.map((g) => g.id))
+  const firstIndexByGroup = new Map<string, number>()
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i]!
+    if (r.type !== 'item') {
+      continue
+    }
+    const groupId = r.worktree.workspaceGroupId
+    if (!groupId || !validIds.has(groupId)) {
+      continue
+    }
+    if (!firstIndexByGroup.has(groupId)) {
+      firstIndexByGroup.set(groupId, i)
+    }
+  }
+  if (firstIndexByGroup.size === 0) {
+    return rows
+  }
+  const out: Row[] = []
+  const consumed = new Set<number>()
+  for (let i = 0; i < rows.length; i++) {
+    if (consumed.has(i)) {
+      continue
+    }
+    const r = rows[i]!
+    out.push(r)
+    consumed.add(i)
+    if (r.type !== 'item') {
+      continue
+    }
+    const groupId = r.worktree.workspaceGroupId
+    if (!groupId || !validIds.has(groupId)) {
+      continue
+    }
+    if (firstIndexByGroup.get(groupId) !== i) {
+      continue
+    }
+    for (let j = i + 1; j < rows.length; j++) {
+      if (consumed.has(j)) {
+        continue
+      }
+      const r2 = rows[j]!
+      if (r2.type !== 'item') {
+        continue
+      }
+      if (r2.worktree.workspaceGroupId === groupId) {
+        out.push(r2)
+        consumed.add(j)
+      }
+    }
+  }
+  return out
 }
 
 export function getGroupKeyForWorktree(

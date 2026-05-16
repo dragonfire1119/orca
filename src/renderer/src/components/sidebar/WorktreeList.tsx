@@ -285,14 +285,6 @@ function getVirtualRowTransform(start: number): string {
   return `translateY(${start}px)`
 }
 
-function prefersReducedMotion(): boolean {
-  return (
-    typeof window !== 'undefined' &&
-    typeof window.matchMedia === 'function' &&
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  )
-}
-
 type GroupHeaderRowDropTargetProps = {
   row: GroupHeaderRowData
   onAssign: (worktreeIds: readonly string[], groupId: WorkspaceGroupId | null) => void

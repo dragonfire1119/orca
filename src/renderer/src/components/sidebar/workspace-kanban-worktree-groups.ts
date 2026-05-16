@@ -24,6 +24,39 @@ export function groupWorkspaceKanbanWorktrees(params: {
 
   for (const items of grouped.values()) {
     items.sort((a, b) => Number(b.isPinned) - Number(a.isPinned) || sortBoardWorktrees(a, b))
+    clusterByWorkspaceGroup(items)
   }
   return grouped
+}
+
+function clusterByWorkspaceGroup(items: Worktree[]): void {
+  if (items.length < 2) {
+    return
+  }
+  const seenGroups = new Set<string>()
+  for (let i = 0; i < items.length; i++) {
+    const a = items[i]!
+    if (a.isPinned) {
+      continue
+    }
+    const groupId = a.workspaceGroupId
+    if (!groupId || seenGroups.has(groupId)) {
+      continue
+    }
+    seenGroups.add(groupId)
+    let insertAt = i + 1
+    for (let j = i + 1; j < items.length; j++) {
+      const b = items[j]!
+      if (b.isPinned) {
+        continue
+      }
+      if (b.workspaceGroupId === groupId) {
+        if (j !== insertAt) {
+          const moved = items.splice(j, 1)[0]!
+          items.splice(insertAt, 0, moved)
+        }
+        insertAt++
+      }
+    }
+  }
 }

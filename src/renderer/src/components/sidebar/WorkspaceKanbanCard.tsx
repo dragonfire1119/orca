@@ -12,7 +12,7 @@ import StatusIndicator from './StatusIndicator'
 import WorktreeCard from './WorktreeCard'
 import WorktreeContextMenu from './WorktreeContextMenu'
 import { useWorktreeActivityStatus } from './use-worktree-activity-status'
-import { writeWorkspaceDragData } from './workspace-status'
+import { writeWorkspaceDragData, getWorkspaceGroupSwatchClass } from './workspace-status'
 
 type WorkspaceKanbanCardProps = {
   worktree: Worktree
@@ -114,6 +114,13 @@ function WorkspaceKanbanCompactCard({
   const deleteState = useAppStore((s) => s.deleteStateByWorktreeId[worktree.id])
   const isDeleting = deleteState?.isDeleting ?? false
   const status = useWorktreeActivityStatus(worktree.id)
+  const workspaceGroups = useAppStore((s) => s.workspaceGroups)
+  const groupColor = useMemo(() => {
+    if (!worktree.workspaceGroupId) {
+      return undefined
+    }
+    return workspaceGroups.find((g) => g.id === worktree.workspaceGroupId)?.color
+  }, [worktree.workspaceGroupId, workspaceGroups])
   const contextWorktrees = useMemo(
     () =>
       isSelected && selectedWorktrees && selectedWorktrees.length > 0
@@ -173,7 +180,7 @@ function WorkspaceKanbanCompactCard({
             onDragStart={nativeDragEnabled ? handleDragStart : undefined}
             onClick={handleClick}
             className={cn(
-              'flex h-8 w-full min-w-0 cursor-pointer items-center rounded-md border px-2 text-left text-[12px] outline-none transition-colors',
+              'relative flex h-8 w-full min-w-0 cursor-pointer items-center rounded-md border px-2 text-left text-[12px] outline-none transition-colors',
               isActive
                 ? 'border-sidebar-ring bg-sidebar-accent text-sidebar-accent-foreground'
                 : isSelected
@@ -193,6 +200,13 @@ function WorkspaceKanbanCompactCard({
             aria-label={`Open ${worktree.displayName}`}
             aria-busy={isDeleting}
           >
+            {groupColor ? (
+              <span
+                aria-hidden
+                data-testid="workspace-group-stripe"
+                className={`absolute left-0 top-0 bottom-0 w-[2px] ${getWorkspaceGroupSwatchClass(groupColor)}`}
+              />
+            ) : null}
             <StatusIndicator status={status} aria-hidden="true" className="mr-1" />
             <span className="sr-only">{getWorktreeStatusLabel(status)}</span>
             <span className="min-w-0 flex-1 truncate">{worktree.displayName}</span>
