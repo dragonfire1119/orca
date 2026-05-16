@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import {
   ContextMenu,
@@ -18,7 +18,9 @@ type Props = {
   memberCount: number
   collapsed: boolean
   isRenaming?: boolean
+  renameDraft?: string
   onToggleCollapsed: (groupId: WorkspaceGroupId) => void
+  onRenameDraftChange: (groupId: WorkspaceGroupId, draft: string) => void
   onRenameCommit: (groupId: WorkspaceGroupId, name: string) => void
   onRenameCancel: (groupId: WorkspaceGroupId) => void
   onStartRename: (groupId: WorkspaceGroupId) => void
@@ -34,7 +36,9 @@ export function GroupHeaderRow({
   memberCount,
   collapsed,
   isRenaming,
+  renameDraft,
   onToggleCollapsed,
+  onRenameDraftChange,
   onRenameCommit,
   onRenameCancel,
   onStartRename,
@@ -42,16 +46,17 @@ export function GroupHeaderRow({
   onReorder,
   onUngroup
 }: Props): React.JSX.Element {
-  const [draft, setDraft] = useState(name)
   const inputRef = useRef<HTMLInputElement>(null)
+  const wasRenamingRef = useRef(Boolean(isRenaming))
+  const draft = renameDraft ?? name
 
   useEffect(() => {
-    if (isRenaming) {
-      setDraft(name)
+    if (isRenaming && !wasRenamingRef.current) {
       inputRef.current?.focus()
       inputRef.current?.select()
     }
-  }, [isRenaming, name])
+    wasRenamingRef.current = Boolean(isRenaming)
+  }, [isRenaming])
 
   const Chevron = collapsed ? ChevronRight : ChevronDown
 
@@ -76,7 +81,7 @@ export function GroupHeaderRow({
             <input
               ref={inputRef}
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(e) => onRenameDraftChange(groupId, e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   onRenameCommit(groupId, draft)

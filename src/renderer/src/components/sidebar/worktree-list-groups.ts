@@ -30,13 +30,7 @@ export { branchName }
 // Why: `none` is the legacy persisted value for Status grouping. The actual
 // ungrouped sidebar mode is `flat`. `workspace-status` is the upstream name
 // added in stablyai/orca#2128.
-export type WorktreeGroupBy =
-  | 'flat'
-  | 'none'
-  | 'workspace-status'
-  | 'repo'
-  | 'pr-status'
-  | 'group'
+export type WorktreeGroupBy = 'flat' | 'none' | 'workspace-status' | 'repo' | 'pr-status' | 'group'
 export type RepoGroupOrdering = 'manual' | 'visible-worktree-order'
 
 export function getRepoGroupOrdering(groupBy: WorktreeGroupBy, sortBy: SortBy): RepoGroupOrdering {
@@ -197,7 +191,6 @@ function emitPinnedGroup(
   collapsedGroups: Set<string>,
   result: Row[],
   showLineageContext: boolean,
-  force: boolean,
   workspaceGroups: readonly WorkspaceGroup[]
 ): Set<string> {
   const pinned = worktrees.filter((w) => w.isPinned)
@@ -398,7 +391,6 @@ export function buildRows(
     collapsedGroups,
     result,
     nestLineage,
-    groupBy === 'workspace-status' || groupBy === 'none',
     workspaceGroups
   )
   const unpinned = pinnedIds.size > 0 ? worktrees.filter((w) => !pinnedIds.has(w.id)) : worktrees
@@ -421,7 +413,7 @@ export function buildRows(
     for (const g of sortedGroups) {
       const members = groupedMembers.get(g.id) ?? []
       const key = `workspace-group:${g.id}`
-      const isCollapsed = Boolean(g.collapsed) || collapsedGroups.has(key)
+      const isCollapsed = Boolean(g.collapsed)
       result.push({
         type: 'header',
         key,
@@ -597,7 +589,7 @@ export function buildRows(
   return clusterWorkspaceGroupMembers(result, workspaceGroups)
 }
 
-function clusterWorkspaceGroupMembers(
+export function clusterWorkspaceGroupMembers(
   rows: Row[],
   workspaceGroups: readonly WorkspaceGroup[]
 ): Row[] {
@@ -605,52 +597,55 @@ function clusterWorkspaceGroupMembers(
     return rows
   }
   const validIds = new Set(workspaceGroups.map((g) => g.id))
-  const firstIndexByGroup = new Map<string, number>()
-  for (let i = 0; i < rows.length; i++) {
-    const r = rows[i]!
-    if (r.type !== 'item') {
-      continue
-    }
-    const groupId = r.worktree.workspaceGroupId
-    if (!groupId || !validIds.has(groupId)) {
-      continue
-    }
-    if (!firstIndexByGroup.has(groupId)) {
-      firstIndexByGroup.set(groupId, i)
-    }
-  }
-  if (firstIndexByGroup.size === 0) {
-    return rows
-  }
   const out: Row[] = []
+  let i = 0
+  while (i < rows.length) {
+    const head = rows[i]!
+    if (head.type === 'header') {
+      out.push(head)
+      i++
+      let segEnd = i
+      while (segEnd < rows.length && rows[segEnd]!.type !== 'header') {
+        segEnd++
+      }
+      const segment = rows.slice(i, segEnd) as WorktreeRow[]
+      out.push(...clusterSegment(segment, validIds))
+      i = segEnd
+    } else {
+      let segEnd = i
+      while (segEnd < rows.length && rows[segEnd]!.type !== 'header') {
+        segEnd++
+      }
+      const segment = rows.slice(i, segEnd) as WorktreeRow[]
+      out.push(...clusterSegment(segment, validIds))
+      i = segEnd
+    }
+  }
+  return out
+}
+
+function clusterSegment(items: WorktreeRow[], validIds: ReadonlySet<string>): WorktreeRow[] {
+  if (items.length < 2) {
+    return items
+  }
+  const out: WorktreeRow[] = []
   const consumed = new Set<number>()
-  for (let i = 0; i < rows.length; i++) {
+  for (let i = 0; i < items.length; i++) {
     if (consumed.has(i)) {
       continue
     }
-    const r = rows[i]!
-    out.push(r)
+    out.push(items[i]!)
     consumed.add(i)
-    if (r.type !== 'item') {
-      continue
-    }
-    const groupId = r.worktree.workspaceGroupId
+    const groupId = items[i]!.worktree.workspaceGroupId
     if (!groupId || !validIds.has(groupId)) {
       continue
     }
-    if (firstIndexByGroup.get(groupId) !== i) {
-      continue
-    }
-    for (let j = i + 1; j < rows.length; j++) {
+    for (let j = i + 1; j < items.length; j++) {
       if (consumed.has(j)) {
         continue
       }
-      const r2 = rows[j]!
-      if (r2.type !== 'item') {
-        continue
-      }
-      if (r2.worktree.workspaceGroupId === groupId) {
-        out.push(r2)
+      if (items[j]!.worktree.workspaceGroupId === groupId) {
+        out.push(items[j]!)
         consumed.add(j)
       }
     }

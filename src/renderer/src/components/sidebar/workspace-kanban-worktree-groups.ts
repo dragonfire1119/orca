@@ -29,7 +29,7 @@ export function groupWorkspaceKanbanWorktrees(params: {
   return grouped
 }
 
-function clusterByWorkspaceGroup(items: Worktree[]): void {
+export function clusterByWorkspaceGroup(items: Worktree[]): void {
   if (items.length < 2) {
     return
   }

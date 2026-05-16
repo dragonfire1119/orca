@@ -3,7 +3,10 @@ import type React from 'react'
 import type { WorkspaceGroupId } from '../../../../shared/types'
 import { hasWorkspaceDragData, readWorkspaceDragDataIds } from './workspace-status'
 
-export function useWorkspaceGroupDrop(args: {
+export function useWorkspaceGroupDrop({
+  onAssign,
+  groupId
+}: {
   onAssign: (worktreeIds: readonly string[], groupId: WorkspaceGroupId | null) => void
   groupId: WorkspaceGroupId | null
 }): {
@@ -34,9 +37,9 @@ export function useWorkspaceGroupDrop(args: {
       if (ids.length === 0) {
         return
       }
-      args.onAssign(ids, args.groupId)
+      onAssign(ids, groupId)
     },
-    [args]
+    [onAssign, groupId]
   )
 
   return {

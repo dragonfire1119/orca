@@ -183,6 +183,8 @@ type VirtualizedWorktreeViewportProps = {
   workspaceStatuses: readonly WorkspaceStatusDefinition[]
   workspaceGroups: readonly WorkspaceGroup[]
   renamingGroupId: WorkspaceGroupId | null
+  renameDraft: string
+  onRenameDraftChange: (groupId: WorkspaceGroupId, draft: string) => void
   onToggleGroupCollapsed: (groupId: WorkspaceGroupId) => void
   onGroupRenameCommit: (groupId: WorkspaceGroupId, name: string) => void
   onGroupRenameCancel: (groupId: WorkspaceGroupId) => void
@@ -289,6 +291,8 @@ type GroupHeaderRowDropTargetProps = {
   row: GroupHeaderRowData
   onAssign: (worktreeIds: readonly string[], groupId: WorkspaceGroupId | null) => void
   renamingGroupId: WorkspaceGroupId | null
+  renameDraft: string
+  onRenameDraftChange: (groupId: WorkspaceGroupId, draft: string) => void
   onToggleGroupCollapsed: (groupId: WorkspaceGroupId) => void
   onGroupRenameCommit: (groupId: WorkspaceGroupId, name: string) => void
   onGroupRenameCancel: (groupId: WorkspaceGroupId) => void
@@ -302,6 +306,8 @@ function GroupHeaderRowDropTarget({
   row,
   onAssign,
   renamingGroupId,
+  renameDraft,
+  onRenameDraftChange,
   onToggleGroupCollapsed,
   onGroupRenameCommit,
   onGroupRenameCancel,
@@ -314,6 +320,7 @@ function GroupHeaderRowDropTarget({
   const drop = useWorkspaceGroupDrop({ onAssign, groupId })
 
   if (row.workspaceGroupId) {
+    const isRenaming = renamingGroupId === row.workspaceGroupId
     return (
       <div
         {...drop.bind}
@@ -327,7 +334,9 @@ function GroupHeaderRowDropTarget({
           color={row.workspaceGroupColor ?? 'neutral'}
           memberCount={row.count}
           collapsed={Boolean(row.collapsed)}
-          isRenaming={renamingGroupId === row.workspaceGroupId}
+          isRenaming={isRenaming}
+          renameDraft={isRenaming ? renameDraft : undefined}
+          onRenameDraftChange={onRenameDraftChange}
           onToggleCollapsed={onToggleGroupCollapsed}
           onRenameCommit={onGroupRenameCommit}
           onRenameCancel={onGroupRenameCancel}
@@ -381,6 +390,8 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   workspaceStatuses,
   workspaceGroups,
   renamingGroupId,
+  renameDraft,
+  onRenameDraftChange,
   onToggleGroupCollapsed,
   onGroupRenameCommit,
   onGroupRenameCancel,
@@ -960,6 +971,8 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                   row={row}
                   onAssign={onAssignGroupDrop}
                   renamingGroupId={renamingGroupId}
+                  renameDraft={renameDraft}
+                  onRenameDraftChange={onRenameDraftChange}
                   onToggleGroupCollapsed={onToggleGroupCollapsed}
                   onGroupRenameCommit={onGroupRenameCommit}
                   onGroupRenameCancel={onGroupRenameCancel}
@@ -1447,7 +1460,6 @@ const WorktreeList = React.memo(function WorktreeList({
   const workspaceStatuses = useAppStore((s) => s.workspaceStatuses)
   const workspaceGroups = useAppStore((s) => s.workspaceGroups)
   const setWorkspaceGroups = useAppStore((s) => s.setWorkspaceGroups)
-  const toggleCollapsedGroup = useAppStore((s) => s.toggleCollapsedGroup)
   const sortBy = useAppStore((s) => s.sortBy)
   const showActiveOnly = useAppStore((s) => s.showActiveOnly)
   const hideDefaultBranchWorkspace = useAppStore((s) => s.hideDefaultBranchWorkspace)
@@ -1922,6 +1934,7 @@ const WorktreeList = React.memo(function WorktreeList({
   )
 
   const [renamingGroupId, setRenamingGroupId] = useState<WorkspaceGroupId | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
 
   const handleToggleGroupCollapsed = useCallback(
     (groupId: WorkspaceGroupId) => {
@@ -1929,27 +1942,36 @@ const WorktreeList = React.memo(function WorktreeList({
         g.id === groupId ? { ...g, collapsed: !g.collapsed } : g
       )
       setWorkspaceGroups(next)
-      toggleCollapsedGroup(`workspace-group:${groupId}`)
     },
-    [workspaceGroups, setWorkspaceGroups, toggleCollapsedGroup]
+    [workspaceGroups, setWorkspaceGroups]
   )
 
   const handleGroupRenameCommit = useCallback(
     (groupId: WorkspaceGroupId, name: string) => {
       setWorkspaceGroups(buildRenameGroup({ existing: workspaceGroups, groupId, name }))
       setRenamingGroupId(null)
+      setRenameDraft('')
     },
     [workspaceGroups, setWorkspaceGroups]
   )
 
   const handleGroupRenameCancel = useCallback((_groupId: WorkspaceGroupId) => {
     setRenamingGroupId(null)
+    setRenameDraft('')
   }, [])
 
   const handleGroupStartRename = useCallback(
-    (groupId: WorkspaceGroupId) => setRenamingGroupId(groupId),
-    []
+    (groupId: WorkspaceGroupId) => {
+      const initial = workspaceGroups.find((g) => g.id === groupId)?.name ?? ''
+      setRenameDraft(initial)
+      setRenamingGroupId(groupId)
+    },
+    [workspaceGroups]
   )
+
+  const handleRenameDraftChange = useCallback((_groupId: WorkspaceGroupId, draft: string) => {
+    setRenameDraft(draft)
+  }, [])
 
   const handleGroupRecolor = useCallback(
     (groupId: WorkspaceGroupId, color: WorkspaceGroupColor) => {
@@ -1998,11 +2020,16 @@ const WorktreeList = React.memo(function WorktreeList({
 
   const handleAssignDrop = useCallback(
     (worktreeIds: readonly string[], groupId: WorkspaceGroupId | null): void => {
-      for (const id of worktreeIds) {
-        void updateWorktreeMeta(id, { workspaceGroupId: groupId })
+      if (worktreeIds.length === 0) {
+        return
       }
+      const updates = new Map<string, { workspaceGroupId: WorkspaceGroupId | null }>()
+      for (const id of worktreeIds) {
+        updates.set(id, { workspaceGroupId: groupId })
+      }
+      void updateWorktreesMeta(updates)
     },
-    [updateWorktreeMeta]
+    [updateWorktreesMeta]
   )
 
   const moveWorktreeToStatus = useCallback(
@@ -2150,6 +2177,8 @@ const WorktreeList = React.memo(function WorktreeList({
       workspaceStatuses={workspaceStatuses}
       workspaceGroups={workspaceGroups}
       renamingGroupId={renamingGroupId}
+      renameDraft={renameDraft}
+      onRenameDraftChange={handleRenameDraftChange}
       onToggleGroupCollapsed={handleToggleGroupCollapsed}
       onGroupRenameCommit={handleGroupRenameCommit}
       onGroupRenameCancel={handleGroupRenameCancel}

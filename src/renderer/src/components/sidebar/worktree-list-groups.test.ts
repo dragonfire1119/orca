@@ -4,12 +4,14 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   buildRows,
+  clusterWorkspaceGroupMembers,
   getGroupKeyForWorktree,
   getLineageGroupKey,
   getLineageRenderInfo,
   getPRGroupKey,
   getRepoGroupOrdering
 } from './worktree-list-groups'
+import type { Row, WorktreeRow, GroupHeaderRow } from './worktree-list-groups'
 import type { Repo, Worktree, WorktreeLineage, WorkspaceGroup } from '../../../../shared/types'
 import type { WorktreeGroupBy } from './worktree-list-groups'
 
@@ -708,4 +710,107 @@ describe('buildRows other modes — groupColor carries across', () => {
       expect(item?.groupColor).toBe('rose')
     })
   }
+})
+
+describe('clusterWorkspaceGroupMembers', () => {
+  const wgrp = (id: string): WorkspaceGroup => ({
+    id,
+    name: id,
+    color: 'blue',
+    sortOrder: 0,
+    createdAt: 0
+  })
+
+  const item = (id: string, groupId: string | null = null): WorktreeRow =>
+    ({
+      type: 'item',
+      worktree: { id, workspaceGroupId: groupId } as Worktree,
+      repo: undefined,
+      depth: 0,
+      lineageTrail: [],
+      isLastLineageChild: false,
+      lineageChildCount: 0
+    }) as WorktreeRow
+
+  const header = (key: string): GroupHeaderRow => ({
+    type: 'header',
+    key,
+    label: key,
+    count: 0,
+    tone: ''
+  })
+
+  it('returns unchanged rows when no groups exist', () => {
+    const rows: Row[] = [item('a', null), item('b', null)]
+    const out = clusterWorkspaceGroupMembers(rows, [])
+    expect(out).toEqual(rows)
+  })
+
+  it('clusters members of same group within a single segment', () => {
+    const groups = [wgrp('g1')]
+    const rows: Row[] = [item('a', 'g1'), item('b', null), item('c', 'g1'), item('d', null)]
+    const out = clusterWorkspaceGroupMembers(rows, groups)
+    const ids = out.filter((r): r is WorktreeRow => r.type === 'item').map((r) => r.worktree.id)
+    expect(ids).toEqual(['a', 'c', 'b', 'd'])
+  })
+
+  it('does NOT cross header boundaries', () => {
+    const groups = [wgrp('g1')]
+    const rows: Row[] = [
+      header('repo:A'),
+      item('a', 'g1'),
+      item('b', null),
+      header('repo:B'),
+      item('c', 'g1'),
+      item('d', null)
+    ]
+    const out = clusterWorkspaceGroupMembers(rows, groups)
+    const flat = out.map((r) =>
+      r.type === 'header' ? `H:${r.key}` : (r as WorktreeRow).worktree.id
+    )
+    expect(flat).toEqual(['H:repo:A', 'a', 'b', 'H:repo:B', 'c', 'd'])
+  })
+
+  it('clusters within multiple segments independently', () => {
+    const groups = [wgrp('g1'), wgrp('g2')]
+    const rows: Row[] = [
+      header('h1'),
+      item('a', 'g1'),
+      item('b', null),
+      item('c', 'g1'),
+      header('h2'),
+      item('d', 'g2'),
+      item('e', null),
+      item('f', 'g2')
+    ]
+    const out = clusterWorkspaceGroupMembers(rows, groups)
+    const flat = out.map((r) =>
+      r.type === 'header' ? `H:${r.key}` : (r as WorktreeRow).worktree.id
+    )
+    expect(flat).toEqual(['H:h1', 'a', 'c', 'b', 'H:h2', 'd', 'f', 'e'])
+  })
+
+  it('handles items before the first header', () => {
+    const groups = [wgrp('g1')]
+    const rows: Row[] = [
+      item('a', 'g1'),
+      item('b', null),
+      item('c', 'g1'),
+      header('h1'),
+      item('d', null)
+    ]
+    const out = clusterWorkspaceGroupMembers(rows, groups)
+    const flat = out.map((r) =>
+      r.type === 'header' ? `H:${r.key}` : (r as WorktreeRow).worktree.id
+    )
+    expect(flat).toEqual(['a', 'c', 'b', 'H:h1', 'd'])
+  })
+
+  it('ignores items in invalid (deleted) groups', () => {
+    const groups = [wgrp('g1')]
+    const rows: Row[] = [item('a', 'g_missing'), item('b', null), item('c', 'g_missing')]
+    const out = clusterWorkspaceGroupMembers(rows, groups)
+    const ids = out.filter((r): r is WorktreeRow => r.type === 'item').map((r) => r.worktree.id)
+    expect(ids).toEqual(['a', 'b', 'c'])
+  })
 })

@@ -18,8 +18,6 @@ import {
   Bell,
   BellOff,
   FolderPlus,
-  Link,
-  MessageSquare,
   Moon,
   Pencil,
   Pin,
@@ -382,27 +380,32 @@ const WorktreeContextMenu = React.memo(function WorktreeContextMenu({
   const handleAssignToGroup = useCallback(
     (groupId: WorkspaceGroupId) => {
       setMenuOpen(false)
-      void Promise.all(
-        activeContextWorktrees.map((item) =>
-          item.workspaceGroupId === groupId
-            ? Promise.resolve()
-            : updateWorktreeMeta(item.id, { workspaceGroupId: groupId })
-        )
-      )
+      const updates = new Map<string, { workspaceGroupId: WorkspaceGroupId | null }>()
+      for (const item of activeContextWorktrees) {
+        if (item.workspaceGroupId === groupId) {
+          continue
+        }
+        updates.set(item.id, { workspaceGroupId: groupId })
+      }
+      if (updates.size > 0) {
+        void updateWorktreesMeta(updates)
+      }
     },
-    [activeContextWorktrees, updateWorktreeMeta]
+    [activeContextWorktrees, updateWorktreesMeta]
   )
 
   const handleRemoveFromGroup = useCallback(() => {
     setMenuOpen(false)
-    void Promise.all(
-      activeContextWorktrees.map((item) =>
-        item.workspaceGroupId
-          ? updateWorktreeMeta(item.id, { workspaceGroupId: null })
-          : Promise.resolve()
-      )
-    )
-  }, [activeContextWorktrees, updateWorktreeMeta])
+    const updates = new Map<string, { workspaceGroupId: WorkspaceGroupId | null }>()
+    for (const item of activeContextWorktrees) {
+      if (item.workspaceGroupId) {
+        updates.set(item.id, { workspaceGroupId: null })
+      }
+    }
+    if (updates.size > 0) {
+      void updateWorktreesMeta(updates)
+    }
+  }, [activeContextWorktrees, updateWorktreesMeta])
 
   const handleCreateNewGroup = useCallback(() => {
     setMenuOpen(false)
@@ -417,11 +420,13 @@ const WorktreeContextMenu = React.memo(function WorktreeContextMenu({
     if (currentGroupBy !== 'group') {
       setGroupBy('group')
     }
-    void Promise.all(
-      activeContextWorktrees.map((item) =>
-        updateWorktreeMeta(item.id, { workspaceGroupId: newGroup.id })
-      )
-    )
+    const updates = new Map<string, { workspaceGroupId: WorkspaceGroupId | null }>()
+    for (const item of activeContextWorktrees) {
+      updates.set(item.id, { workspaceGroupId: newGroup.id })
+    }
+    if (updates.size > 0) {
+      void updateWorktreesMeta(updates)
+    }
     onStartRenameGroup?.(newGroup.id)
   }, [
     activeContextWorktrees,
@@ -429,7 +434,7 @@ const WorktreeContextMenu = React.memo(function WorktreeContextMenu({
     onStartRenameGroup,
     setGroupBy,
     setWorkspaceGroups,
-    updateWorktreeMeta,
+    updateWorktreesMeta,
     workspaceGroups
   ])
 
