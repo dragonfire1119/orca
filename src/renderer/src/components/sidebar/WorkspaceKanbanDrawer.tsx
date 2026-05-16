@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '@/store'
 import { useAllWorktrees, useRepoMap } from '@/store/selectors'
-import { cn } from '@/lib/utils'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
-import { Pin } from 'lucide-react'
+import WorkspaceKanbanAreaSelectionOverlay from './WorkspaceKanbanAreaSelectionOverlay'
 import WorkspaceKanbanDrawerHeader from './WorkspaceKanbanDrawerHeader'
+import WorkspaceKanbanPinDropTarget from './WorkspaceKanbanPinDropTarget'
 import WorkspaceKanbanStatusLane from './WorkspaceKanbanStatusLane'
 import {
   getWorkspaceStatus,
@@ -12,6 +12,7 @@ import {
   readWorkspaceDragDataIds
 } from './workspace-status'
 import { useWorkspaceStatusDocumentDrop } from './use-workspace-status-drop'
+import { useWorkspaceKanbanAreaSelection } from './use-workspace-kanban-area-selection'
 import { useWorkspaceKanbanSelection } from './use-workspace-kanban-selection'
 import type { WorkspaceStatus, Worktree } from '../../../../shared/types'
 import { makeWorkspaceStatusId } from '../../../../shared/workspace-statuses'
@@ -69,9 +70,18 @@ export default function WorkspaceKanbanDrawer({
   const {
     selectedWorktreeIds,
     selectedWorktrees,
+    selectionAnchorId,
     updateSelectionForGesture,
+    updateSelectionForArea,
     selectForContextMenu
   } = useWorkspaceKanbanSelection(open, boardWorktrees)
+  const { areaSelectionRect, handleAreaSelectionPointerDown } = useWorkspaceKanbanAreaSelection({
+    open,
+    boardRef,
+    selectedWorktreeIds,
+    selectionAnchorId,
+    updateSelectionForArea
+  })
 
   const moveWorktreeToStatus = useCallback(
     (worktreeId: string, status: WorkspaceStatus) => {
@@ -338,20 +348,18 @@ export default function WorkspaceKanbanDrawer({
           onAddStatus={handleAddStatus}
         />
 
-        <div ref={boardRef} className="flex min-h-0 flex-1 flex-col overflow-hidden p-3">
-          <div
-            data-workspace-pin-drop-target=""
-            className={cn(
-              'mb-3 flex h-8 shrink-0 items-center gap-2 rounded-md border border-dashed border-sidebar-border bg-background/45 px-3 text-[12px] text-muted-foreground transition-colors',
-              pinDragOver && 'border-sidebar-ring bg-sidebar-accent text-foreground'
-            )}
+        <div
+          ref={boardRef}
+          className="relative flex min-h-0 flex-1 flex-col overflow-hidden p-3"
+          data-workspace-board-selection-surface=""
+          onPointerDown={handleAreaSelectionPointerDown}
+        >
+          <WorkspaceKanbanAreaSelectionOverlay rect={areaSelectionRect} />
+          <WorkspaceKanbanPinDropTarget
+            isDragOver={pinDragOver}
             onDragOver={handlePinDragOver}
             onDragLeave={handlePinDragLeave}
-          >
-            <Pin className="size-3.5" />
-            <span className="font-medium">Pinned</span>
-            <span className="truncate">Drop here to pin without changing status.</span>
-          </div>
+          />
 
           <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden scrollbar-sleek">
             <div

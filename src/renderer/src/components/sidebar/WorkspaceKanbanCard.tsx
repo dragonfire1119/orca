@@ -56,7 +56,12 @@ export default function WorkspaceKanbanCard({
   }
 
   return (
-    <div className="relative" data-workspace-board-card-mode="detailed">
+    <div
+      className="relative"
+      data-workspace-board-card-id={worktree.id}
+      data-workspace-board-card-mode="detailed"
+      data-workspace-board-card-selected={isSelected ? 'true' : 'false'}
+    >
       {worktree.isPinned ? (
         <Badge
           variant="outline"
@@ -155,6 +160,8 @@ function WorkspaceKanbanCompactCard({
               isDeleting && 'cursor-not-allowed opacity-50 grayscale'
             )}
             data-workspace-board-card-mode="compact"
+            data-workspace-board-card-id={worktree.id}
+            data-workspace-board-card-selected={isSelected ? 'true' : 'false'}
             aria-label={`Open ${worktree.displayName}`}
             aria-busy={isDeleting}
           >
