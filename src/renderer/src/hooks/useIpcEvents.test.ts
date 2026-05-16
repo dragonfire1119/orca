@@ -277,8 +277,10 @@ describe('useIpcEvents updater integration', () => {
         runtime: {
           getTerminalFitOverrides: () => Promise.resolve([]),
           getTerminalDrivers: () => Promise.resolve([]),
+          getBrowserDrivers: () => Promise.resolve([]),
           onTerminalFitOverrideChanged: () => () => {},
-          onTerminalDriverChanged: () => () => {}
+          onTerminalDriverChanged: () => () => {},
+          onBrowserDriverChanged: () => () => {}
         },
         ssh: {
           listTargets: () => Promise.resolve([]),
@@ -486,8 +488,10 @@ describe('useIpcEvents updater integration', () => {
         runtime: {
           getTerminalFitOverrides: () => Promise.resolve([]),
           getTerminalDrivers: () => Promise.resolve([]),
+          getBrowserDrivers: () => Promise.resolve([]),
           onTerminalFitOverrideChanged: () => () => {},
-          onTerminalDriverChanged: () => () => {}
+          onTerminalDriverChanged: () => () => {},
+          onBrowserDriverChanged: () => () => {}
         },
         ssh: {
           listTargets: () => Promise.resolve([]),
@@ -745,8 +749,10 @@ describe('useIpcEvents updater integration', () => {
         runtime: {
           getTerminalFitOverrides: () => Promise.resolve([]),
           getTerminalDrivers: () => Promise.resolve([]),
+          getBrowserDrivers: () => Promise.resolve([]),
           onTerminalFitOverrideChanged: () => () => {},
-          onTerminalDriverChanged: () => () => {}
+          onTerminalDriverChanged: () => () => {},
+          onBrowserDriverChanged: () => () => {}
         },
         ssh: {
           listTargets: () => Promise.resolve([]),
@@ -1079,8 +1085,10 @@ describe('useIpcEvents browser tab close routing', () => {
         runtime: {
           getTerminalFitOverrides: () => Promise.resolve([]),
           getTerminalDrivers: () => Promise.resolve([]),
+          getBrowserDrivers: () => Promise.resolve([]),
           onTerminalFitOverrideChanged: () => () => {},
-          onTerminalDriverChanged: () => () => {}
+          onTerminalDriverChanged: () => () => {},
+          onBrowserDriverChanged: () => () => {}
         },
         agentStatus: { onSet: () => () => {} }
       }
@@ -1286,8 +1294,10 @@ describe('useIpcEvents browser tab close routing', () => {
         runtime: {
           getTerminalFitOverrides: () => Promise.resolve([]),
           getTerminalDrivers: () => Promise.resolve([]),
+          getBrowserDrivers: () => Promise.resolve([]),
           onTerminalFitOverrideChanged: () => () => {},
-          onTerminalDriverChanged: () => () => {}
+          onTerminalDriverChanged: () => () => {},
+          onBrowserDriverChanged: () => () => {}
         },
         agentStatus: { onSet: () => () => {} }
       }
@@ -1488,8 +1498,10 @@ describe('useIpcEvents browser tab close routing', () => {
         runtime: {
           getTerminalFitOverrides: () => Promise.resolve([]),
           getTerminalDrivers: () => Promise.resolve([]),
+          getBrowserDrivers: () => Promise.resolve([]),
           onTerminalFitOverrideChanged: () => () => {},
-          onTerminalDriverChanged: () => () => {}
+          onTerminalDriverChanged: () => () => {},
+          onBrowserDriverChanged: () => () => {}
         },
         agentStatus: { onSet: () => () => {} }
       }
@@ -1699,8 +1711,10 @@ describe('useIpcEvents CLI-created worktree activation', () => {
         runtime: {
           getTerminalFitOverrides: () => Promise.resolve([]),
           getTerminalDrivers: () => Promise.resolve([]),
+          getBrowserDrivers: () => Promise.resolve([]),
           onTerminalFitOverrideChanged: () => () => {},
-          onTerminalDriverChanged: () => () => {}
+          onTerminalDriverChanged: () => () => {},
+          onBrowserDriverChanged: () => () => {}
         },
         agentStatus: { onSet: () => () => {} }
       }
@@ -1883,8 +1897,10 @@ describe('useIpcEvents agent status snapshot integration', () => {
         runtime: {
           getTerminalFitOverrides: () => Promise.resolve([]),
           getTerminalDrivers: () => Promise.resolve([]),
+          getBrowserDrivers: () => Promise.resolve([]),
           onTerminalFitOverrideChanged: () => () => {},
-          onTerminalDriverChanged: () => () => {}
+          onTerminalDriverChanged: () => () => {},
+          onBrowserDriverChanged: () => () => {}
         },
         ssh: {
           listTargets: () => Promise.resolve([]),
