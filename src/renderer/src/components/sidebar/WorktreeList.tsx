@@ -84,6 +84,7 @@ import { branchDisplayName } from './WorktreeCardHelpers'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
 import { GroupHeaderRow } from './GroupHeaderRow'
 import { buildRenameGroup } from './workspace-group-actions'
+import { useWorkspaceGroupDrop } from './use-workspace-group-drop'
 
 // How long to wait after a sortEpoch bump before actually re-sorting.
 // Prevents jarring position shifts when background events (AI starting work,
@@ -184,6 +185,7 @@ type VirtualizedWorktreeViewportProps = {
   onPinWorktree: (worktreeId: string) => void
   onPinWorktrees: (worktreeIds: readonly string[]) => void
   showInlineAgentCards: boolean
+  onAssignGroupDrop: (worktreeIds: readonly string[], groupId: WorkspaceGroupId | null) => void
   // Why: broad grouping changes still remount the viewport, while add/delete
   // stays mounted for row-key anchoring and layout animation. These refs bridge
   // both paths so the virtualizer never falls back to scrollTop 0.
@@ -273,6 +275,74 @@ function getVirtualRowTransform(start: number): string {
   return `translateY(${start}px)`
 }
 
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  )
+}
+
+type GroupHeaderRowDropTargetProps = {
+  row: GroupHeaderRowData
+  onAssign: (worktreeIds: readonly string[], groupId: WorkspaceGroupId | null) => void
+  renamingGroupId: WorkspaceGroupId | null
+  onToggleGroupCollapsed: (groupId: WorkspaceGroupId) => void
+  onGroupRenameCommit: (groupId: WorkspaceGroupId, name: string) => void
+  onGroupRenameCancel: (groupId: WorkspaceGroupId) => void
+  onGroupHeaderContextMenu: (groupId: WorkspaceGroupId, e: React.MouseEvent) => void
+}
+
+function GroupHeaderRowDropTarget({
+  row,
+  onAssign,
+  renamingGroupId,
+  onToggleGroupCollapsed,
+  onGroupRenameCommit,
+  onGroupRenameCancel,
+  onGroupHeaderContextMenu
+}: GroupHeaderRowDropTargetProps): React.JSX.Element {
+  const groupId = row.workspaceGroupId ?? null
+  const drop = useWorkspaceGroupDrop({ onAssign, groupId })
+
+  if (row.workspaceGroupId) {
+    return (
+      <div
+        {...drop.bind}
+        className={
+          drop.isOver ? 'rounded-md ring-1 ring-sidebar-ring/40 bg-sidebar-accent' : undefined
+        }
+      >
+        <GroupHeaderRow
+          groupId={row.workspaceGroupId}
+          name={row.label}
+          color={row.workspaceGroupColor ?? 'neutral'}
+          memberCount={row.count}
+          collapsed={Boolean(row.collapsed)}
+          isRenaming={renamingGroupId === row.workspaceGroupId}
+          onToggleCollapsed={onToggleGroupCollapsed}
+          onRenameCommit={onGroupRenameCommit}
+          onRenameCancel={onGroupRenameCancel}
+          onContextMenu={onGroupHeaderContextMenu}
+        />
+      </div>
+    )
+  }
+
+  return (
+    <div
+      {...drop.bind}
+      className={
+        drop.isOver ? 'rounded-md ring-1 ring-sidebar-ring/40 bg-sidebar-accent' : undefined
+      }
+    >
+      <div className="px-2 py-1 text-xs uppercase tracking-wide text-muted-foreground">
+        {row.label} <span className="ml-2">{row.count}</span>
+      </div>
+    </div>
+  )
+}
+
 const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewport({
   rows,
   activeWorktreeId,
@@ -309,6 +379,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   onPinWorktree,
   onPinWorktrees,
   showInlineAgentCards,
+  onAssignGroupDrop,
   scrollOffsetRef,
   scrollAnchorRef
 }: VirtualizedWorktreeViewportProps) {
@@ -859,7 +930,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
             return null
           }
 
-          if (row.type === 'header' && row.workspaceGroupId) {
+          if (row.type === 'header' && (row.workspaceGroupId || row.isUngroupedBucket)) {
             return (
               <div
                 key={vItem.key}
@@ -871,37 +942,15 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                 className="absolute left-0 right-0"
                 style={{ transform: getVirtualRowTransform(vItem.start) }}
               >
-                <GroupHeaderRow
-                  groupId={row.workspaceGroupId}
-                  name={row.label}
-                  color={row.workspaceGroupColor ?? 'neutral'}
-                  memberCount={row.count}
-                  collapsed={Boolean(row.collapsed)}
-                  isRenaming={renamingGroupId === row.workspaceGroupId}
-                  onToggleCollapsed={onToggleGroupCollapsed}
-                  onRenameCommit={onGroupRenameCommit}
-                  onRenameCancel={onGroupRenameCancel}
-                  onContextMenu={onGroupHeaderContextMenu}
+                <GroupHeaderRowDropTarget
+                  row={row}
+                  onAssign={onAssignGroupDrop}
+                  renamingGroupId={renamingGroupId}
+                  onToggleGroupCollapsed={onToggleGroupCollapsed}
+                  onGroupRenameCommit={onGroupRenameCommit}
+                  onGroupRenameCancel={onGroupRenameCancel}
+                  onGroupHeaderContextMenu={onGroupHeaderContextMenu}
                 />
-              </div>
-            )
-          }
-
-          if (row.type === 'header' && row.isUngroupedBucket) {
-            return (
-              <div
-                key={vItem.key}
-                role="presentation"
-                data-worktree-virtual-row
-                data-worktree-virtual-row-key={String(vItem.key)}
-                data-index={vItem.index}
-                ref={virtualizer.measureElement}
-                className="absolute left-0 right-0"
-                style={{ transform: getVirtualRowTransform(vItem.start) }}
-              >
-                <div className="px-2 py-1 text-xs uppercase tracking-wide text-muted-foreground">
-                  {row.label} <span className="ml-2">{row.count}</span>
-                </div>
               </div>
             )
           }
@@ -1884,6 +1933,15 @@ const WorktreeList = React.memo(function WorktreeList({
     []
   )
 
+  const handleAssignDrop = useCallback(
+    (worktreeIds: readonly string[], groupId: WorkspaceGroupId | null): void => {
+      for (const id of worktreeIds) {
+        void updateWorktreeMeta(id, { workspaceGroupId: groupId })
+      }
+    },
+    [updateWorktreeMeta]
+  )
+
   const moveWorktreeToStatus = useCallback(
     (worktreeId: string, status: WorkspaceStatus) => {
       const current = worktreeMap.get(worktreeId)
@@ -2026,6 +2084,7 @@ const WorktreeList = React.memo(function WorktreeList({
       onPinWorktree={pinWorktree}
       onPinWorktrees={pinWorktrees}
       showInlineAgentCards={cardProps.includes('inline-agents')}
+      onAssignGroupDrop={handleAssignDrop}
       scrollOffsetRef={scrollOffsetRef}
       scrollAnchorRef={scrollAnchorRef}
     />
