@@ -1,5 +1,14 @@
+/* eslint-disable max-lines -- Why: the right sidebar owns activity-bar visibility, routing, and resize behavior as one interaction surface; splitting the tab table away would make hidden-tab fallbacks harder to audit. */
 import React, { useEffect, useMemo, useState } from 'react'
-import { Files, Search, GitBranch, ListChecks, Cable, PanelRight } from 'lucide-react'
+import {
+  Files,
+  Search,
+  GitBranch,
+  ListChecks,
+  Cable,
+  PanelRight,
+  History
+} from 'lucide-react'
 import { useAppStore } from '@/store'
 import { getRepoMapFromState, useActiveWorktree, useRepoById } from '@/store/selectors'
 import { cn } from '@/lib/utils'
@@ -23,6 +32,7 @@ import SearchPanel from './Search'
 import ChecksPanel from './ChecksPanel'
 import PortsPanel from './PortsPanel'
 import { GitHubRateLimitCompact } from '@/components/github/github-rate-limit-display'
+import AiVaultPanel from './AiVaultPanel'
 
 const MIN_WIDTH = 220
 // Why: long file names (e.g. construction drawing sheets, multi-part document
@@ -87,6 +97,12 @@ const ACTIVITY_ITEMS: ActivityBarItem[] = [
     icon: Search,
     title: 'Search',
     shortcut: `${isMac ? '\u21E7' : 'Shift+'}${mod}F`
+  },
+  {
+    id: 'vault',
+    icon: History,
+    title: 'Session History',
+    shortcut: ''
   },
   {
     id: 'source-control',
@@ -248,6 +264,7 @@ function RightSidebarInner(): React.JSX.Element {
         {effectiveTab === 'source-control' && <SourceControl />}
         {effectiveTab === 'checks' && <ChecksPanel />}
         {effectiveTab === 'ports' && <PortsPanel />}
+        {effectiveTab === 'vault' && <AiVaultPanel />}
       </div>
     </div>
   )
