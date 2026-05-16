@@ -95,3 +95,41 @@ export function buildReorderHeaders(args: {
     return pos === undefined ? grp : { ...grp, sortOrder: pos }
   })
 }
+
+type GroupMemberLookup = {
+  id: string
+  workspaceGroupId?: WorkspaceGroupId | null
+}
+
+export function expandWorktreeIdsToGroupMembers(
+  worktreeIds: readonly string[],
+  allWorktrees: readonly GroupMemberLookup[]
+): string[] {
+  const byGroup = new Map<WorkspaceGroupId, string[]>()
+  for (const w of allWorktrees) {
+    if (!w.workspaceGroupId) {
+      continue
+    }
+    const arr = byGroup.get(w.workspaceGroupId) ?? []
+    arr.push(w.id)
+    byGroup.set(w.workspaceGroupId, arr)
+  }
+  const idToGroup = new Map<string, WorkspaceGroupId>()
+  for (const w of allWorktrees) {
+    if (w.workspaceGroupId) {
+      idToGroup.set(w.id, w.workspaceGroupId)
+    }
+  }
+  const result = new Set<string>()
+  for (const id of worktreeIds) {
+    result.add(id)
+    const groupId = idToGroup.get(id)
+    if (!groupId) {
+      continue
+    }
+    for (const memberId of byGroup.get(groupId) ?? []) {
+      result.add(memberId)
+    }
+  }
+  return [...result]
+}

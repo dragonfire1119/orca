@@ -46,7 +46,8 @@ import {
   getWorkspaceStatusVisualMeta
 } from './workspace-status'
 import { WorktreeOpenInSubMenu } from './WorktreeOpenInMenu'
-import { buildNewGroupFromCreate } from './workspace-group-actions'
+import { buildNewGroupFromCreate, expandWorktreeIdsToGroupMembers } from './workspace-group-actions'
+import { useAllWorktrees } from '@/store/selectors'
 import { pickAutoCycledColor } from '../../../../shared/workspace-groups'
 
 type Props = {
@@ -156,7 +157,9 @@ const WorktreeContextMenu = React.memo(function WorktreeContextMenu({
   onStartRenameGroup
 }: Props) {
   const updateWorktreeMeta = useAppStore((s) => s.updateWorktreeMeta)
+  const updateWorktreesMeta = useAppStore((s) => s.updateWorktreesMeta)
   const workspaceStatuses = useAppStore((s) => s.workspaceStatuses)
+  const allWorktrees = useAllWorktrees()
   const workspaceGroups = useAppStore((s) => s.workspaceGroups)
   const setWorkspaceGroups = useAppStore((s) => s.setWorkspaceGroups)
   const openModal = useAppStore((s) => s.openModal)
@@ -250,15 +253,34 @@ const WorktreeContextMenu = React.memo(function WorktreeContextMenu({
   const handleAssignWorkspaceStatus = useCallback(
     (status: string) => {
       setMenuOpen(false)
-      void Promise.all(
-        activeContextWorktrees.map((item) =>
-          getWorkspaceStatus(item, workspaceStatuses) === status
-            ? Promise.resolve()
-            : updateWorktreeMeta(item.id, { workspaceStatus: status })
-        )
+      const expanded = expandWorktreeIdsToGroupMembers(
+        activeContextWorktrees.map((w) => w.id),
+        allWorktrees
       )
+      const worktreeById = new Map(allWorktrees.map((w) => [w.id, w]))
+      const updates = new Map<string, { workspaceStatus: string }>()
+      for (const id of expanded) {
+        const item = worktreeById.get(id)
+        if (!item || getWorkspaceStatus(item, workspaceStatuses) === status) {
+          continue
+        }
+        updates.set(id, { workspaceStatus: status })
+      }
+      if (updates.size === 1 && expanded.length === 1) {
+        void updateWorktreeMeta(activeContextWorktrees[0]!.id, { workspaceStatus: status })
+        return
+      }
+      if (updates.size > 0) {
+        void updateWorktreesMeta(updates)
+      }
     },
-    [activeContextWorktrees, updateWorktreeMeta, workspaceStatuses]
+    [
+      activeContextWorktrees,
+      allWorktrees,
+      updateWorktreeMeta,
+      updateWorktreesMeta,
+      workspaceStatuses
+    ]
   )
 
   const handleRename = useCallback(() => {

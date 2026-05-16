@@ -25,6 +25,7 @@ import {
 } from './use-workspace-kanban-outside-dismiss'
 import { useVisibleWorkspaceKanbanWorktreeIds } from './use-visible-workspace-kanban-worktree-ids'
 import { groupWorkspaceKanbanWorktrees } from './workspace-kanban-worktree-groups'
+import { expandWorktreeIdsToGroupMembers } from './workspace-group-actions'
 import type { WorkspaceStatus } from '../../../../shared/types'
 import { makeWorkspaceStatusId } from '../../../../shared/workspace-statuses'
 
@@ -102,18 +103,30 @@ export default function WorkspaceKanbanDrawer({
     useWorkspaceKanbanColumnResize(workspaceBoardColumnWidth, setWorkspaceBoardColumnWidth)
   const moveWorktreeToStatus = useCallback(
     (worktreeId: string, status: WorkspaceStatus) => {
-      const current = worktreeById.get(worktreeId)
-      if (!current || getWorkspaceStatus(current, workspaceStatuses) === status) {
+      const expanded = expandWorktreeIdsToGroupMembers([worktreeId], allWorktrees)
+      const updates = new Map<string, { workspaceStatus: WorkspaceStatus }>()
+      for (const id of expanded) {
+        const current = worktreeById.get(id)
+        if (!current || getWorkspaceStatus(current, workspaceStatuses) === status) {
+          continue
+        }
+        updates.set(id, { workspaceStatus: status })
+      }
+      if (updates.size === 1 && expanded.length === 1) {
+        void updateWorktreeMeta(worktreeId, { workspaceStatus: status })
         return
       }
-      void updateWorktreeMeta(worktreeId, { workspaceStatus: status })
+      if (updates.size > 0) {
+        void updateWorktreesMeta(updates)
+      }
     },
-    [updateWorktreeMeta, workspaceStatuses, worktreeById]
+    [allWorktrees, updateWorktreeMeta, updateWorktreesMeta, workspaceStatuses, worktreeById]
   )
   const moveWorktreesToStatus = useCallback(
     (worktreeIds: readonly string[], status: WorkspaceStatus) => {
+      const expanded = expandWorktreeIdsToGroupMembers(worktreeIds, allWorktrees)
       const updates = new Map<string, { workspaceStatus: WorkspaceStatus }>()
-      for (const worktreeId of worktreeIds) {
+      for (const worktreeId of expanded) {
         const current = worktreeById.get(worktreeId)
         if (!current || getWorkspaceStatus(current, workspaceStatuses) === status) {
           continue
@@ -124,7 +137,7 @@ export default function WorkspaceKanbanDrawer({
         void updateWorktreesMeta(updates)
       }
     },
-    [updateWorktreesMeta, workspaceStatuses, worktreeById]
+    [allWorktrees, updateWorktreesMeta, workspaceStatuses, worktreeById]
   )
   const pinWorktree = useCallback(
     (worktreeId: string) => {

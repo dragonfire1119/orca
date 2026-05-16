@@ -6,7 +6,8 @@ import {
   buildAssignToGroupChanges,
   buildRenameGroup,
   buildRecolorGroup,
-  buildReorderHeaders
+  buildReorderHeaders,
+  expandWorktreeIdsToGroupMembers
 } from './workspace-group-actions'
 import type { WorkspaceGroup } from '../../../../shared/types'
 
@@ -125,5 +126,41 @@ describe('buildReorderHeaders', () => {
     expect(next.find((x) => x.id === 'wg_a')!.sortOrder).toBeLessThan(
       next.find((x) => x.id === 'wg_b')!.sortOrder
     )
+  })
+})
+
+describe('expandWorktreeIdsToGroupMembers', () => {
+  const worktrees = [
+    { id: 'wt1', workspaceGroupId: 'wg_a' },
+    { id: 'wt2', workspaceGroupId: 'wg_a' },
+    { id: 'wt3', workspaceGroupId: 'wg_b' },
+    { id: 'wt4', workspaceGroupId: null },
+    { id: 'wt5' }
+  ]
+
+  it('expands a grouped worktree to all members of its group', () => {
+    const result = expandWorktreeIdsToGroupMembers(['wt1'], worktrees)
+    expect(new Set(result)).toEqual(new Set(['wt1', 'wt2']))
+  })
+
+  it('passes through ungrouped worktrees unchanged', () => {
+    const result = expandWorktreeIdsToGroupMembers(['wt4'], worktrees)
+    expect(result).toEqual(['wt4'])
+  })
+
+  it('passes through worktrees with missing workspaceGroupId field', () => {
+    const result = expandWorktreeIdsToGroupMembers(['wt5'], worktrees)
+    expect(result).toEqual(['wt5'])
+  })
+
+  it('dedupes when multiple inputs share a group', () => {
+    const result = expandWorktreeIdsToGroupMembers(['wt1', 'wt2'], worktrees)
+    expect(new Set(result)).toEqual(new Set(['wt1', 'wt2']))
+    expect(result.length).toBe(2)
+  })
+
+  it('combines members from multiple groups + ungrouped input', () => {
+    const result = expandWorktreeIdsToGroupMembers(['wt1', 'wt3', 'wt4'], worktrees)
+    expect(new Set(result)).toEqual(new Set(['wt1', 'wt2', 'wt3', 'wt4']))
   })
 })

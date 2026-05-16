@@ -88,7 +88,8 @@ import {
   buildRecolorGroup,
   buildRenameGroup,
   buildReorderHeaders,
-  buildUngroupChanges
+  buildUngroupChanges,
+  expandWorktreeIdsToGroupMembers
 } from './workspace-group-actions'
 import { useWorkspaceGroupDrop } from './use-workspace-group-drop'
 
@@ -2014,19 +2015,31 @@ const WorktreeList = React.memo(function WorktreeList({
 
   const moveWorktreeToStatus = useCallback(
     (worktreeId: string, status: WorkspaceStatus) => {
-      const current = worktreeMap.get(worktreeId)
-      if (!current || getWorkspaceStatus(current, workspaceStatuses) === status) {
+      const expanded = expandWorktreeIdsToGroupMembers([worktreeId], worktrees)
+      const updates = new Map<string, { workspaceStatus: WorkspaceStatus }>()
+      for (const id of expanded) {
+        const current = worktreeMap.get(id)
+        if (!current || getWorkspaceStatus(current, workspaceStatuses) === status) {
+          continue
+        }
+        updates.set(id, { workspaceStatus: status })
+      }
+      if (updates.size === 1 && expanded.length === 1) {
+        void updateWorktreeMeta(worktreeId, { workspaceStatus: status })
         return
       }
-      void updateWorktreeMeta(worktreeId, { workspaceStatus: status })
+      if (updates.size > 0) {
+        void updateWorktreesMeta(updates)
+      }
     },
-    [updateWorktreeMeta, worktreeMap, workspaceStatuses]
+    [updateWorktreeMeta, updateWorktreesMeta, worktreeMap, worktrees, workspaceStatuses]
   )
 
   const moveWorktreesToStatus = useCallback(
     (worktreeIds: readonly string[], status: WorkspaceStatus) => {
+      const expanded = expandWorktreeIdsToGroupMembers(worktreeIds, worktrees)
       const updates = new Map<string, { workspaceStatus: WorkspaceStatus }>()
-      for (const worktreeId of worktreeIds) {
+      for (const worktreeId of expanded) {
         const current = worktreeMap.get(worktreeId)
         if (!current || getWorkspaceStatus(current, workspaceStatuses) === status) {
           continue
@@ -2037,7 +2050,7 @@ const WorktreeList = React.memo(function WorktreeList({
         void updateWorktreesMeta(updates)
       }
     },
-    [updateWorktreesMeta, worktreeMap, workspaceStatuses]
+    [updateWorktreesMeta, worktreeMap, worktrees, workspaceStatuses]
   )
 
   const pinWorktree = useCallback(
