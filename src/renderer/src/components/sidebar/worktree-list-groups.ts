@@ -24,7 +24,16 @@ import type { SortBy } from './smart-sort'
 
 export { branchName }
 
-export type WorktreeGroupBy = 'none' | 'workspace-status' | 'repo' | 'pr-status'
+// Why: `none` is the legacy persisted value for Status grouping. The actual
+// ungrouped sidebar mode is `flat`. `workspace-status` is the upstream name
+// added in stablyai/orca#2128.
+export type WorktreeGroupBy =
+  | 'flat'
+  | 'none'
+  | 'workspace-status'
+  | 'repo'
+  | 'pr-status'
+  | 'group'
 export type RepoGroupOrdering = 'manual' | 'visible-worktree-order'
 
 export function getRepoGroupOrdering(groupBy: WorktreeGroupBy, sortBy: SortBy): RepoGroupOrdering {

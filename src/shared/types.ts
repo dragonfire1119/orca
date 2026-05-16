@@ -142,6 +142,27 @@ export type WorkspaceStatusDefinition = {
   icon?: string
 }
 
+export type WorkspaceGroupId = string
+
+export type WorkspaceGroupColor =
+  | 'neutral'
+  | 'blue'
+  | 'sky'
+  | 'violet'
+  | 'amber'
+  | 'emerald'
+  | 'rose'
+  | 'zinc'
+
+export type WorkspaceGroup = {
+  id: WorkspaceGroupId
+  name: string
+  color: WorkspaceGroupColor
+  collapsed?: boolean
+  sortOrder: number
+  createdAt: number
+}
+
 export type Worktree = {
   id: string // `${repoId}::${path}`
   instanceId?: string
@@ -185,6 +206,7 @@ export type Worktree = {
   /** Remote/branch Orca should publish review commits to when it created this worktree. */
   pushTarget?: GitPushTarget
   workspaceStatus?: WorkspaceStatus
+  workspaceGroupId?: WorkspaceGroupId | null
   diffComments?: DiffComment[]
 } & GitWorktreeInfo
 
@@ -225,6 +247,8 @@ export type WorktreeMeta = {
   pushTarget?: GitPushTarget
   /** User-assigned workspace board status for manual sidebar organization. */
   workspaceStatus?: WorkspaceStatus
+  /** Single-membership reference to a WorkspaceGroup, if any. Cleared by Ungroup or Remove from group. */
+  workspaceGroupId?: WorkspaceGroupId | null
   diffComments?: DiffComment[]
 }
 
@@ -1783,7 +1807,8 @@ export type PersistedUIState = {
   lastActiveWorktreeId: string | null
   sidebarWidth: number
   rightSidebarWidth: number
-  groupBy: 'none' | 'workspace-status' | 'repo' | 'pr-status'
+  groupBy: 'flat' | 'none' | 'workspace-status' | 'repo' | 'pr-status' | 'group'
+  showWorkspaceLineage?: boolean
   sortBy: 'name' | 'smart' | 'recent' | 'repo'
   showActiveOnly: boolean
   /** Hide the repo's original checked-out branch from workspace navigation
@@ -1798,6 +1823,7 @@ export type PersistedUIState = {
   editorFontZoomLevel: number
   worktreeCardProperties: WorktreeCardProperty[]
   workspaceStatuses?: WorkspaceStatusDefinition[]
+  workspaceGroups?: WorkspaceGroup[]
   workspaceBoardOpacity?: number
   workspaceBoardCompact?: boolean
   workspaceBoardColumnWidth?: number
