@@ -12,12 +12,36 @@
 
 import { execSync } from 'child_process'
 import { randomUUID } from 'crypto'
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs'
 import path from 'path'
 import os from 'os'
 
 /** Temp file where the test repo path is stored for the fixture to read. */
 export const TEST_REPO_PATH_FILE = path.join(os.tmpdir(), 'orca-e2e-test-repo-path.txt')
+
+function writeElectronAppPackageMetadata(root: string): void {
+  const rootPackageJson = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')) as {
+    name?: string
+    version?: string
+  }
+  const outMainDir = path.join(root, 'out', 'main')
+
+  // Why: Electron reports version "0.0" when launched directly from
+  // out/main/index.js without nearby package metadata. electron-updater
+  // validates app.getVersion() during module initialization, before the E2E
+  // dev-mode guard can skip updater setup.
+  writeFileSync(
+    path.join(outMainDir, 'package.json'),
+    `${JSON.stringify(
+      {
+        name: rootPackageJson.name ?? 'orca',
+        version: rootPackageJson.version ?? '0.0.0'
+      },
+      null,
+      2
+    )}\n`
+  )
+}
 
 export default function globalSetup(): void {
   const root = process.cwd()
@@ -38,6 +62,7 @@ export default function globalSetup(): void {
     })
     console.log('[e2e] Build complete.')
   }
+  writeElectronAppPackageMetadata(root)
 
   if (process.env.ORCA_E2E_SSH_LOCALHOST === '1') {
     // Why: the localhost SSH spec deploys Orca's relay from out/relay. The
