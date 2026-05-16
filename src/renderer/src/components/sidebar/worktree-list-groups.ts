@@ -5,6 +5,9 @@ import type {
   Repo,
   Worktree,
   WorktreeLineage,
+  WorkspaceGroup,
+  WorkspaceGroupColor,
+  WorkspaceGroupId,
   WorkspaceStatusDefinition
 } from '../../../../shared/types'
 import { branchName } from '@/lib/git-utils'
@@ -50,6 +53,10 @@ export type GroupHeaderRow = {
   tone: string
   icon?: React.ComponentType<{ className?: string }>
   repo?: Repo
+  workspaceGroupId?: WorkspaceGroupId
+  workspaceGroupColor?: WorkspaceGroupColor
+  collapsed?: boolean
+  isUngroupedBucket?: boolean
 }
 
 export type WorktreeRow = {
@@ -64,6 +71,7 @@ export type WorktreeRow = {
   lineageCollapsed?: boolean
   parentLabel?: string
   lineageState?: 'valid' | 'missing'
+  groupColor?: WorkspaceGroupColor
 }
 export type Row = GroupHeaderRow | WorktreeRow
 
@@ -188,7 +196,9 @@ function emitPinnedGroup(
   worktreeMap: Map<string, Worktree>,
   collapsedGroups: Set<string>,
   result: Row[],
-  showLineageContext: boolean
+  showLineageContext: boolean,
+  force: boolean,
+  workspaceGroups: readonly WorkspaceGroup[]
 ): Set<string> {
   const pinned = worktrees.filter((w) => w.isPinned)
   if (pinned.length === 0) {
@@ -207,7 +217,8 @@ function emitPinnedGroup(
     appendWorktreeRows(result, pinned, repoMap, lineageById, worktreeMap, {
       nestLineage: false,
       showLineageContext,
-      collapsedGroups
+      collapsedGroups,
+      workspaceGroups
     })
   }
   return new Set(pinned.map((w) => w.id))
@@ -223,11 +234,15 @@ function buildWorktreeRow(
   lineageTrail: boolean[],
   isLastLineageChild: boolean,
   lineageChildCount: number,
-  lineageCollapsed: boolean
+  lineageCollapsed: boolean,
+  workspaceGroups: readonly WorkspaceGroup[]
 ): WorktreeRow {
   const lineage = showLineageContext
     ? getLineageRenderInfo(worktree, lineageById, worktreeMap)
     : { state: 'none' as const }
+  const groupColor = worktree.workspaceGroupId
+    ? workspaceGroups.find((g) => g.id === worktree.workspaceGroupId)?.color
+    : undefined
   return {
     type: 'item',
     worktree,
@@ -242,7 +257,8 @@ function buildWorktreeRow(
       ? { parentLabel: lineage.parent.displayName, lineageState: 'valid' as const }
       : lineage.state === 'missing'
         ? { parentLabel: MISSING_PARENT_GROUP_META.label, lineageState: 'missing' as const }
-        : {})
+        : {}),
+    ...(groupColor ? { groupColor } : {})
   }
 }
 
@@ -256,9 +272,10 @@ function appendWorktreeRows(
     nestLineage: boolean
     showLineageContext: boolean
     collapsedGroups: Set<string>
+    workspaceGroups?: readonly WorkspaceGroup[]
   }
 ): void {
-  const { nestLineage, showLineageContext, collapsedGroups } = options
+  const { nestLineage, showLineageContext, collapsedGroups, workspaceGroups = [] } = options
   if (!nestLineage) {
     for (const worktree of worktrees) {
       result.push(
@@ -272,7 +289,8 @@ function appendWorktreeRows(
           [],
           false,
           0,
-          false
+          false,
+          workspaceGroups
         )
       )
     }
@@ -318,7 +336,8 @@ function appendWorktreeRows(
         lineageTrail,
         isLastChild,
         children.length,
-        lineageCollapsed
+        lineageCollapsed,
+        workspaceGroups
       )
     )
     if (lineageCollapsed) {
@@ -366,7 +385,8 @@ export function buildRows(
   worktreeMap: Map<string, Worktree> = new Map(
     worktrees.map((worktree) => [worktree.id, worktree])
   ),
-  nestLineage = false
+  nestLineage = false,
+  workspaceGroups: readonly WorkspaceGroup[] = []
 ): Row[] {
   const result: Row[] = []
 
@@ -377,15 +397,77 @@ export function buildRows(
     worktreeMap,
     collapsedGroups,
     result,
-    nestLineage
+    nestLineage,
+    groupBy === 'workspace-status' || groupBy === 'none',
+    workspaceGroups
   )
   const unpinned = pinnedIds.size > 0 ? worktrees.filter((w) => !pinnedIds.has(w.id)) : worktrees
 
-  if (groupBy === 'none') {
+  if (groupBy === 'group') {
+    const sortedGroups = [...workspaceGroups].sort((a, b) => a.sortOrder - b.sortOrder)
+    const validIds = new Set(sortedGroups.map((g) => g.id))
+    const groupedMembers = new Map<string, Worktree[]>()
+    const ungrouped: Worktree[] = []
+    for (const w of unpinned) {
+      if (w.workspaceGroupId && validIds.has(w.workspaceGroupId)) {
+        const arr = groupedMembers.get(w.workspaceGroupId) ?? []
+        arr.push(w)
+        groupedMembers.set(w.workspaceGroupId, arr)
+      } else {
+        ungrouped.push(w)
+      }
+    }
+
+    for (const g of sortedGroups) {
+      const members = groupedMembers.get(g.id) ?? []
+      const key = `workspace-group:${g.id}`
+      const isCollapsed = Boolean(g.collapsed) || collapsedGroups.has(key)
+      result.push({
+        type: 'header',
+        key,
+        label: g.name,
+        count: members.length,
+        tone: 'text-foreground',
+        workspaceGroupId: g.id,
+        workspaceGroupColor: g.color,
+        collapsed: isCollapsed
+      })
+      if (isCollapsed) {
+        continue
+      }
+      appendWorktreeRows(result, members, repoMap, lineageById, worktreeMap, {
+        nestLineage,
+        showLineageContext: nestLineage,
+        collapsedGroups,
+        workspaceGroups
+      })
+    }
+
+    result.push({
+      type: 'header',
+      key: 'ungrouped',
+      label: 'Ungrouped',
+      count: ungrouped.length,
+      tone: 'text-muted-foreground',
+      isUngroupedBucket: true
+    })
+    if (!collapsedGroups.has('ungrouped')) {
+      appendWorktreeRows(result, ungrouped, repoMap, lineageById, worktreeMap, {
+        nestLineage,
+        showLineageContext: nestLineage,
+        collapsedGroups,
+        workspaceGroups
+      })
+    }
+    return result
+  }
+
+  if (groupBy === 'flat') {
     appendWorktreeRows(result, unpinned, repoMap, lineageById, worktreeMap, {
       nestLineage,
       showLineageContext: nestLineage,
-      collapsedGroups
+      collapsedGroups,
+      workspaceGroups
     })
     return result
   }
@@ -506,7 +588,8 @@ export function buildRows(
       appendWorktreeRows(result, group.items, repoMap, lineageById, worktreeMap, {
         nestLineage,
         showLineageContext: nestLineage,
-        collapsedGroups
+        collapsedGroups,
+        workspaceGroups
       })
     }
   }

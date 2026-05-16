@@ -10,7 +10,8 @@ import {
   getPRGroupKey,
   getRepoGroupOrdering
 } from './worktree-list-groups'
-import type { Repo, Worktree, WorktreeLineage } from '../../../../shared/types'
+import type { Repo, Worktree, WorktreeLineage, WorkspaceGroup } from '../../../../shared/types'
+import type { WorktreeGroupBy } from './worktree-list-groups'
 
 const repo: Repo = {
   id: 'repo-1',
@@ -602,4 +603,109 @@ describe('WorktreeList header styles', () => {
 
     expect(source).toContain('[&_path]:cursor-pointer')
   })
+})
+
+const wt = (over: Partial<Worktree>): Worktree => ({ ...worktree, ...over })
+
+const grp = (over: Partial<WorkspaceGroup>): WorkspaceGroup => ({
+  id: 'wg_a',
+  name: 'A',
+  color: 'blue',
+  sortOrder: 0,
+  createdAt: 0,
+  ...over
+})
+
+function callBuildRows(args: {
+  worktrees: Worktree[]
+  workspaceGroups: WorkspaceGroup[]
+  groupBy: WorktreeGroupBy
+}) {
+  return buildRows(
+    args.groupBy,
+    args.worktrees,
+    repoMap,
+    null,
+    new Set<string>(),
+    undefined,
+    undefined,
+    'manual',
+    {},
+    undefined,
+    false,
+    args.workspaceGroups
+  )
+}
+
+describe('buildRows groupBy=group', () => {
+  const workspaceGroups: WorkspaceGroup[] = [
+    grp({ id: 'wg_a', name: 'A', sortOrder: 0 }),
+    grp({ id: 'wg_b', name: 'B', sortOrder: 1 })
+  ]
+
+  it('partitions worktrees under matching workspace-group headers', () => {
+    const rows = callBuildRows({
+      worktrees: [
+        wt({ id: 'wt1', workspaceGroupId: 'wg_a' }),
+        wt({ id: 'wt2', workspaceGroupId: 'wg_b' }),
+        wt({ id: 'wt3', workspaceGroupId: null })
+      ],
+      workspaceGroups,
+      groupBy: 'group'
+    })
+    const headerA = rows.find((r) => r.type === 'header' && r.key === 'workspace-group:wg_a')
+    const ungrouped = rows.find((r) => r.type === 'header' && r.key === 'ungrouped')
+    expect(headerA).toBeDefined()
+    expect(ungrouped).toBeDefined()
+    const headerAIdx = rows.indexOf(headerA!)
+    const ungroupedIdx = rows.indexOf(ungrouped!)
+    expect(headerAIdx).toBeLessThan(ungroupedIdx)
+  })
+
+  it('omits members of a collapsed group', () => {
+    const rows = callBuildRows({
+      worktrees: [wt({ id: 'wt1', workspaceGroupId: 'wg_a' })],
+      workspaceGroups: [grp({ id: 'wg_a', collapsed: true })],
+      groupBy: 'group'
+    })
+    expect(rows.some((r) => r.type === 'item')).toBe(false)
+    expect(rows.some((r) => r.type === 'header' && r.key === 'workspace-group:wg_a')).toBe(true)
+  })
+
+  it('renders empty groups as header-only in group view', () => {
+    const rows = callBuildRows({
+      worktrees: [],
+      workspaceGroups: [grp({ id: 'wg_a' })],
+      groupBy: 'group'
+    })
+    expect(rows.some((r) => r.type === 'header' && r.key === 'workspace-group:wg_a')).toBe(true)
+  })
+
+  it('places pinned worktrees in the pinned section ahead of group headers', () => {
+    const rows = callBuildRows({
+      worktrees: [wt({ id: 'wt1', isPinned: true, workspaceGroupId: 'wg_a' })],
+      workspaceGroups,
+      groupBy: 'group'
+    })
+    const pinnedHeaderIdx = rows.findIndex((r) => r.type === 'header' && r.key === 'pinned')
+    const groupHeaderIdx = rows.findIndex(
+      (r) => r.type === 'header' && r.key === 'workspace-group:wg_a'
+    )
+    expect(pinnedHeaderIdx).toBeGreaterThanOrEqual(0)
+    expect(groupHeaderIdx).toBeGreaterThan(pinnedHeaderIdx)
+  })
+})
+
+describe('buildRows other modes — groupColor carries across', () => {
+  for (const mode of ['flat', 'none', 'repo', 'pr-status'] as const) {
+    it(`returns row.groupColor for a grouped worktree in '${mode}' view`, () => {
+      const rows = callBuildRows({
+        worktrees: [wt({ id: 'wt1', workspaceGroupId: 'wg_a' })],
+        workspaceGroups: [grp({ id: 'wg_a', color: 'rose' })],
+        groupBy: mode
+      })
+      const item = rows.find((r) => r.type === 'item') as { groupColor?: string } | undefined
+      expect(item?.groupColor).toBe('rose')
+    })
+  }
 })

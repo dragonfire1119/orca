@@ -28,6 +28,7 @@ import type {
   Worktree,
   Repo,
   WorktreeLineage,
+  WorkspaceGroup,
   WorkspaceStatus,
   WorkspaceStatusDefinition
 } from '../../../../shared/types'
@@ -169,6 +170,7 @@ type VirtualizedWorktreeViewportProps = {
   reorderRepos: (orderedIds: string[]) => void
   prCache: Record<string, unknown> | null
   workspaceStatuses: readonly WorkspaceStatusDefinition[]
+  workspaceGroups: readonly WorkspaceGroup[]
   onMoveWorktreeToStatus: (worktreeId: string, status: WorkspaceStatus) => void
   onMoveWorktreesToStatus: (worktreeIds: readonly string[], status: WorkspaceStatus) => void
   onPinWorktree: (worktreeId: string) => void
@@ -288,6 +290,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   reorderRepos,
   prCache,
   workspaceStatuses,
+  workspaceGroups,
   onMoveWorktreeToStatus,
   onMoveWorktreesToStatus,
   onPinWorktree,
@@ -598,7 +601,8 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
         repoGroupOrdering,
         worktreeLineageById,
         worktreeMap,
-        true
+        true,
+        workspaceGroups
       ).filter((r): r is Extract<Row, { type: 'item' }> => r.type === 'item')
       if (worktreeRows.length === 0) {
         return
@@ -642,6 +646,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
       prCache,
       repoOrder,
       workspaceStatuses,
+      workspaceGroups,
       worktreeLineageById,
       worktreeMap
     ]
@@ -1312,6 +1317,7 @@ const WorktreeList = React.memo(function WorktreeList({
   const activeWorktreeId = useAppStore((s) => s.activeWorktreeId)
   const groupBy = useAppStore((s) => s.groupBy)
   const workspaceStatuses = useAppStore((s) => s.workspaceStatuses)
+  const workspaceGroups = useAppStore((s) => s.workspaceGroups)
   const sortBy = useAppStore((s) => s.sortBy)
   const showActiveOnly = useAppStore((s) => s.showActiveOnly)
   const hideDefaultBranchWorkspace = useAppStore((s) => s.hideDefaultBranchWorkspace)
@@ -1636,7 +1642,8 @@ const WorktreeList = React.memo(function WorktreeList({
         repoGroupOrdering,
         worktreeLineageById,
         worktreeMap,
-        true
+        true,
+        workspaceGroups
       ),
     [
       groupBy,
@@ -1648,7 +1655,8 @@ const WorktreeList = React.memo(function WorktreeList({
       workspaceStatuses,
       repoGroupOrdering,
       worktreeLineageById,
-      worktreeMap
+      worktreeMap,
+      workspaceGroups
     ]
   )
   // Why: header/mode changes can shift entire groups, so remount the
@@ -1914,6 +1922,7 @@ const WorktreeList = React.memo(function WorktreeList({
       }}
       prCache={prCache}
       workspaceStatuses={workspaceStatuses}
+      workspaceGroups={workspaceGroups}
       onMoveWorktreeToStatus={moveWorktreeToStatus}
       onMoveWorktreesToStatus={moveWorktreesToStatus}
       onPinWorktree={pinWorktree}
