@@ -25,14 +25,20 @@ import { activateAndRevealWorktree } from '@/lib/worktree-activation'
 import { getWorktreeStatusLabel } from '@/lib/worktree-status'
 import { getRepoKindLabel, isFolderRepo } from '../../../../shared/repo-kind'
 import type { HostedReviewInfo } from '../../../../shared/hosted-review'
-import type { Worktree, Repo, IssueInfo, LinearIssue } from '../../../../shared/types'
+import type {
+  Worktree,
+  Repo,
+  IssueInfo,
+  LinearIssue,
+  WorkspaceGroupColor
+} from '../../../../shared/types'
 import { branchDisplayName, CONFLICT_OPERATION_LABELS, FilledBellIcon } from './WorktreeCardHelpers'
 import {
   WorktreeCardDetailsHover,
   WorktreeCardMetaBadges,
   hasWorktreeCardDetails
 } from './WorktreeCardMeta'
-import { writeWorkspaceDragData } from './workspace-status'
+import { getWorkspaceGroupSwatchClass, writeWorkspaceDragData } from './workspace-status'
 import { useWorktreeActivityStatus } from './use-worktree-activity-status'
 import { getWorktreeCardPrDisplay } from './worktree-card-pr-display'
 
@@ -50,6 +56,7 @@ type WorktreeCardProps = {
   lineageCollapsed?: boolean
   lineageChildren?: React.ReactNode
   onLineageToggle?: (event: React.MouseEvent<HTMLButtonElement>) => void
+  groupColor?: WorkspaceGroupColor
   onActivate?: () => void
   onSelectionGesture?: (event: React.MouseEvent<HTMLElement>, worktreeId: string) => boolean
   onContextMenuSelect?: (event: React.MouseEvent<HTMLElement>) => readonly Worktree[]
@@ -78,7 +85,8 @@ const WorktreeCard = React.memo(function WorktreeCard({
   lineageChildCount = 0,
   lineageCollapsed = false,
   lineageChildren,
-  onLineageToggle
+  onLineageToggle,
+  groupColor
 }: WorktreeCardProps) {
   const openModal = useAppStore((s) => s.openModal)
   const updateWorktreeMeta = useAppStore((s) => s.updateWorktreeMeta)
@@ -399,6 +407,14 @@ const WorktreeCard = React.memo(function WorktreeCard({
       onDragStart={nativeDragEnabled ? handleDragStart : undefined}
       aria-busy={isDeleting}
     >
+      {groupColor ? (
+        <span
+          aria-hidden
+          data-testid="workspace-group-stripe"
+          className={`absolute left-0 top-0 bottom-0 w-[2px] ${getWorkspaceGroupSwatchClass(groupColor)}`}
+        />
+      ) : null}
+
       {isDeleting && (
         <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-background/50 backdrop-blur-[1px]">
           <div className="inline-flex items-center gap-1.5 rounded-full bg-background px-3 py-1 text-[11px] font-medium text-foreground shadow-sm border border-border/50">

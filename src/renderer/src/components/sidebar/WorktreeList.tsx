@@ -1072,6 +1072,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                   onSelectionGesture={onSelectionGesture}
                   onContextMenuSelect={(event) => onContextMenuSelect(event, itemRow.worktree)}
                   hideRepoBadge={groupBy === 'repo'}
+                  groupColor={itemRow.groupColor}
                   parentLabel={
                     itemRow.depth > 0 && itemRow.lineageState === 'valid'
                       ? undefined
