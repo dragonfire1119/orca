@@ -91,7 +91,20 @@ export function GroupHeaderRow({
               className="flex-1 bg-transparent border-b border-border focus:outline-none text-sm"
             />
           ) : (
-            <span className="flex-1 text-sm font-medium truncate">{name}</span>
+            <span
+              role="button"
+              tabIndex={0}
+              title="Double-click to rename"
+              onDoubleClick={() => onStartRename(groupId)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === 'F2') {
+                  onStartRename(groupId)
+                }
+              }}
+              className="flex-1 text-sm font-medium truncate cursor-text"
+            >
+              {name}
+            </span>
           )}
           <span className="text-xs text-muted-foreground tabular-nums">{memberCount}</span>
         </div>

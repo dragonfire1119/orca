@@ -162,6 +162,8 @@ const WorktreeContextMenu = React.memo(function WorktreeContextMenu({
   const allWorktrees = useAllWorktrees()
   const workspaceGroups = useAppStore((s) => s.workspaceGroups)
   const setWorkspaceGroups = useAppStore((s) => s.setWorkspaceGroups)
+  const currentGroupBy = useAppStore((s) => s.groupBy)
+  const setGroupBy = useAppStore((s) => s.setGroupBy)
   const openModal = useAppStore((s) => s.openModal)
   const repo = useRepoById(worktree.repoId)
   const deleteState = useAppStore((s) => s.deleteStateByWorktreeId[worktree.id])
@@ -412,6 +414,9 @@ const WorktreeContextMenu = React.memo(function WorktreeContextMenu({
       autoColor
     })
     setWorkspaceGroups(groups)
+    if (currentGroupBy !== 'group') {
+      setGroupBy('group')
+    }
     void Promise.all(
       activeContextWorktrees.map((item) =>
         updateWorktreeMeta(item.id, { workspaceGroupId: newGroup.id })
@@ -420,7 +425,9 @@ const WorktreeContextMenu = React.memo(function WorktreeContextMenu({
     onStartRenameGroup?.(newGroup.id)
   }, [
     activeContextWorktrees,
+    currentGroupBy,
     onStartRenameGroup,
+    setGroupBy,
     setWorkspaceGroups,
     updateWorktreeMeta,
     workspaceGroups
