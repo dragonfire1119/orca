@@ -697,6 +697,7 @@ export type PreloadApi = {
     dismiss: (args: { reportId: string }) => Promise<CrashReportRecord | null>
     copyLatestDiagnostics: (args?: {
       reportId?: string
+      notes?: string
     }) => Promise<{ ok: true } | { ok: false; error: string }>
     submit: (args: CrashReportSubmitArgs) => Promise<CrashReportSubmitResult>
   }

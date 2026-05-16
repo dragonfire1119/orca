@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, Clipboard, Send } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -10,20 +10,7 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog'
-import type { CrashReportRecord } from '../../../../shared/crash-reporting'
-import type { GitHubViewer } from '../../../../shared/types'
-
-type SubmitIdentity = {
-  githubLogin: string | null
-  githubEmail: string | null
-}
-
-function getSubmitIdentity(viewer: GitHubViewer | null, anonymous: boolean): SubmitIdentity {
-  if (anonymous || !viewer) {
-    return { githubLogin: null, githubEmail: null }
-  }
-  return { githubLogin: viewer.login, githubEmail: viewer.email }
-}
+import { formatCrashReportText, type CrashReportRecord } from '../../../../shared/crash-reporting'
 
 function formatSummary(report: CrashReportRecord): string {
   return `${report.processType} ${report.reason}${
@@ -36,10 +23,12 @@ export function CrashReportDialog(): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [report, setReport] = useState<CrashReportRecord | null>(null)
   const [notes, setNotes] = useState('')
-  const [viewer, setViewer] = useState<GitHubViewer | null>(null)
-  const [submitAnonymously, setSubmitAnonymously] = useState(false)
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const diagnosticText = useMemo(
+    () => (report ? formatCrashReportText(report, notes) : ''),
+    [notes, report]
+  )
 
   const loadPendingReport = async (promptIfPresent: boolean): Promise<void> => {
     setLoading(true)
@@ -70,32 +59,9 @@ export function CrashReportDialog(): React.JSX.Element {
     })
   }, [])
 
-  useEffect(() => {
-    if (!open) {
-      return
-    }
-    let cancelled = false
-    void window.api.gh
-      .viewer()
-      .then((nextViewer) => {
-        if (!cancelled) {
-          setViewer(nextViewer)
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setViewer(null)
-          console.error('Failed to load GitHub viewer for crash report:', error)
-        }
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [open])
-
   const handleCopy = async (): Promise<void> => {
     const result = await window.api.crashReports.copyLatestDiagnostics(
-      report ? { reportId: report.id } : {}
+      report ? { reportId: report.id, notes } : {}
     )
     if (!result.ok) {
       toast.error(result.error)
@@ -117,13 +83,12 @@ export function CrashReportDialog(): React.JSX.Element {
     }
     setSubmitting(true)
     try {
-      const identity = getSubmitIdentity(viewer, submitAnonymously)
       const result = await window.api.crashReports.submit({
         reportId: report.id,
         notes,
-        submitAnonymously,
-        githubLogin: identity.githubLogin,
-        githubEmail: identity.githubEmail
+        submitAnonymously: true,
+        githubLogin: null,
+        githubEmail: null
       })
       if (!result.ok) {
         throw new Error(result.error)
@@ -150,15 +115,14 @@ export function CrashReportDialog(): React.JSX.Element {
         setOpen(nextOpen)
       }}
     >
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-sm">
             <AlertTriangle className="size-4 text-destructive" />
-            Orca crashed last session
+            Orca closed unexpectedly
           </DialogTitle>
           <DialogDescription className="text-xs">
-            Send a privacy-safe diagnostic report so we can investigate without asking you to find
-            system crash files.
+            Send a privacy-safe diagnostic report to help us understand what happened.
           </DialogDescription>
         </DialogHeader>
 
@@ -175,20 +139,15 @@ export function CrashReportDialog(): React.JSX.Element {
               value={notes}
               onChange={(event) => setNotes(event.target.value)}
               rows={4}
-              placeholder="Optional: what were you doing when it crashed?"
+              placeholder="Optional: what were you doing before Orca closed?"
               className="min-h-24 w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             />
-            {viewer ? (
-              <label className="flex cursor-pointer items-center gap-2 text-xs text-foreground">
-                <input
-                  type="checkbox"
-                  checked={submitAnonymously}
-                  onChange={(event) => setSubmitAnonymously(event.target.checked)}
-                  className="size-3.5 rounded border border-border bg-background align-middle accent-foreground"
-                />
-                Submit anonymously instead of as {viewer.login}
-              </label>
-            ) : null}
+            <div className="space-y-1.5">
+              <div className="text-[11px] font-medium text-muted-foreground">Diagnostic text</div>
+              <pre className="max-h-44 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted/20 p-3 font-mono text-[11px] leading-5 text-muted-foreground">
+                {diagnosticText}
+              </pre>
+            </div>
           </div>
         ) : (
           <div className="rounded-md border border-border/70 bg-muted/30 p-3 text-xs text-muted-foreground">

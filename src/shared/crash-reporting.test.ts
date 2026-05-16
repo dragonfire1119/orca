@@ -58,7 +58,9 @@ describe('crash-reporting shared helpers', () => {
   })
 
   it('recognizes crash reasons captured by Electron process-gone events', () => {
+    expect(isCrashReportReason('abnormal-exit')).toBe(true)
     expect(isCrashReportReason('crashed')).toBe(true)
+    expect(isCrashReportReason('launch-failed')).toBe(true)
     expect(isCrashReportReason('memory-eviction')).toBe(true)
     expect(isCrashReportReason('clean-exit')).toBe(false)
   })

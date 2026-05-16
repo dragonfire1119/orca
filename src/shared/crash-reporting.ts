@@ -73,7 +73,15 @@ const PATH_PATTERNS = [
 ]
 
 export function isCrashReportReason(reason: string): boolean {
-  return ['crashed', 'oom', 'killed', 'integrity-failure', 'memory-eviction'].includes(reason)
+  return [
+    'abnormal-exit',
+    'crashed',
+    'integrity-failure',
+    'killed',
+    'launch-failed',
+    'memory-eviction',
+    'oom'
+  ].includes(reason)
 }
 
 export function sanitizeCrashReportString(value: string): string {

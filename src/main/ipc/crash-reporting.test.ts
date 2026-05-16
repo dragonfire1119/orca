@@ -23,9 +23,12 @@ vi.mock('./feedback', () => ({
 
 import { registerCrashReportingHandlers } from './crash-reporting'
 
-function report(status: CrashReportRecord['status'] = 'pending'): CrashReportRecord {
+function report(
+  status: CrashReportRecord['status'] = 'pending',
+  id = 'crash-1'
+): CrashReportRecord {
   return {
-    id: 'crash-1',
+    id,
     createdAt: '2026-05-16T01:00:00.000Z',
     status,
     source: 'renderer',
@@ -57,27 +60,32 @@ describe('registerCrashReportingHandlers', () => {
       getById: vi.fn(async () => latest),
       dismiss: vi.fn(),
       markSent: vi.fn(),
-      listRecent: vi.fn(),
+      listRecent: vi.fn(async () => [latest]),
       record: vi.fn(),
       formatDiagnosticText: vi.fn()
     } as never)
 
-    const result = await handlers.get('crashReports:copyLatestDiagnostics')?.(null)
+    const result = await handlers.get('crashReports:copyLatestDiagnostics')?.(null, {
+      notes: 'extra /Users/alice/project'
+    })
 
     expect(result).toEqual({ ok: true })
     expect(clipboardWriteTextMock).toHaveBeenCalledWith(expect.stringContaining('[Crash Report]'))
+    expect(clipboardWriteTextMock).toHaveBeenCalledWith(
+      expect.stringContaining('extra [redacted-path]')
+    )
   })
 
   it('submits through feedback and marks the report sent only after success', async () => {
-    const latest = report()
-    const sent = report('sent')
+    const latest = report('pending', 'crash-submit-success')
+    const sent = report('sent', latest.id)
     const markSent = vi.fn(async () => sent)
     registerCrashReportingHandlers({
       getLatestPending: vi.fn(async () => latest),
       getById: vi.fn(async () => latest),
       dismiss: vi.fn(),
       markSent,
-      listRecent: vi.fn(),
+      listRecent: vi.fn(async () => [latest]),
       record: vi.fn(),
       formatDiagnosticText: vi.fn()
     } as never)
@@ -100,16 +108,47 @@ describe('registerCrashReportingHandlers', () => {
     expect(markSent).toHaveBeenCalledWith(latest.id)
   })
 
+  it('does not surface a successful upload as failed if marking sent fails locally', async () => {
+    const latest = report('pending', 'crash-mark-sent-fails')
+    const markSent = vi.fn(async () => {
+      throw new Error('disk unavailable')
+    })
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    registerCrashReportingHandlers({
+      getLatestPending: vi.fn(async () => latest),
+      getById: vi.fn(async () => latest),
+      dismiss: vi.fn(),
+      markSent,
+      listRecent: vi.fn(async () => [latest]),
+      record: vi.fn(),
+      formatDiagnosticText: vi.fn()
+    } as never)
+
+    try {
+      const result = await handlers.get('crashReports:submit')?.(null, {
+        reportId: latest.id,
+        githubLogin: null,
+        githubEmail: null
+      })
+
+      expect(result).toEqual({ ok: true, report: { ...latest, status: 'sent' } })
+      expect(markSent).toHaveBeenCalledWith(latest.id)
+      await expect(handlers.get('crashReports:getLatestPending')?.(null)).resolves.toBeNull()
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+
   it('keeps the report pending on feedback failure', async () => {
     submitFeedbackMock.mockResolvedValue({ ok: false, status: 500, error: 'status 500' })
-    const latest = report()
+    const latest = report('pending', 'crash-submit-failure')
     const markSent = vi.fn()
     registerCrashReportingHandlers({
       getLatestPending: vi.fn(async () => latest),
       getById: vi.fn(async () => latest),
       dismiss: vi.fn(),
       markSent,
-      listRecent: vi.fn(),
+      listRecent: vi.fn(async () => [latest]),
       record: vi.fn(),
       formatDiagnosticText: vi.fn()
     } as never)
@@ -130,13 +169,13 @@ describe('registerCrashReportingHandlers', () => {
         resolveSubmit = resolve
       })
     )
-    const latest = report()
+    const latest = report('pending', 'crash-in-flight')
     const dismiss = vi.fn()
     registerCrashReportingHandlers({
       getLatestPending: vi.fn(async () => latest),
       getById: vi.fn(async () => latest),
       dismiss,
-      markSent: vi.fn(async () => report('sent')),
+      markSent: vi.fn(async () => report('sent', latest.id)),
       listRecent: vi.fn(),
       record: vi.fn(),
       formatDiagnosticText: vi.fn()
