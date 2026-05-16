@@ -185,7 +185,6 @@ type VirtualizedWorktreeViewportProps = {
   onToggleGroupCollapsed: (groupId: WorkspaceGroupId) => void
   onGroupRenameCommit: (groupId: WorkspaceGroupId, name: string) => void
   onGroupRenameCancel: (groupId: WorkspaceGroupId) => void
-  onGroupStartRename: (groupId: WorkspaceGroupId) => void
   onGroupRecolor: (groupId: WorkspaceGroupId, color: WorkspaceGroupColor) => void
   onGroupReorder: (groupId: WorkspaceGroupId, direction: 'up' | 'down') => void
   onGroupUngroup: (groupId: WorkspaceGroupId) => void
@@ -300,7 +299,7 @@ type GroupHeaderRowDropTargetProps = {
   onToggleGroupCollapsed: (groupId: WorkspaceGroupId) => void
   onGroupRenameCommit: (groupId: WorkspaceGroupId, name: string) => void
   onGroupRenameCancel: (groupId: WorkspaceGroupId) => void
-  onGroupStartRename: (groupId: WorkspaceGroupId) => void
+  onStartRenameGroup: (groupId: WorkspaceGroupId) => void
   onGroupRecolor: (groupId: WorkspaceGroupId, color: WorkspaceGroupColor) => void
   onGroupReorder: (groupId: WorkspaceGroupId, direction: 'up' | 'down') => void
   onGroupUngroup: (groupId: WorkspaceGroupId) => void
@@ -313,7 +312,7 @@ function GroupHeaderRowDropTarget({
   onToggleGroupCollapsed,
   onGroupRenameCommit,
   onGroupRenameCancel,
-  onGroupStartRename,
+  onStartRenameGroup,
   onGroupRecolor,
   onGroupReorder,
   onGroupUngroup
@@ -339,7 +338,7 @@ function GroupHeaderRowDropTarget({
           onToggleCollapsed={onToggleGroupCollapsed}
           onRenameCommit={onGroupRenameCommit}
           onRenameCancel={onGroupRenameCancel}
-          onStartRename={onGroupStartRename}
+          onStartRename={onStartRenameGroup}
           onRecolor={onGroupRecolor}
           onReorder={onGroupReorder}
           onUngroup={onGroupUngroup}
@@ -392,7 +391,6 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   onToggleGroupCollapsed,
   onGroupRenameCommit,
   onGroupRenameCancel,
-  onGroupStartRename,
   onGroupRecolor,
   onGroupReorder,
   onGroupUngroup,
@@ -972,7 +970,7 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
                   onToggleGroupCollapsed={onToggleGroupCollapsed}
                   onGroupRenameCommit={onGroupRenameCommit}
                   onGroupRenameCancel={onGroupRenameCancel}
-                  onGroupStartRename={onGroupStartRename}
+                  onStartRenameGroup={onStartRenameGroup}
                   onGroupRecolor={onGroupRecolor}
                   onGroupReorder={onGroupReorder}
                   onGroupUngroup={onGroupUngroup}
@@ -1996,11 +1994,13 @@ const WorktreeList = React.memo(function WorktreeList({
         memberWorktreeIds: memberIds
       })
       setWorkspaceGroups(groups)
-      for (const u of updates) {
-        void updateWorktreeMeta(u.worktreeId, { workspaceGroupId: u.workspaceGroupId })
+      if (updates.length > 0) {
+        void updateWorktreesMeta(
+          new Map(updates.map((u) => [u.worktreeId, { workspaceGroupId: u.workspaceGroupId }]))
+        )
       }
     },
-    [worktrees, workspaceGroups, setWorkspaceGroups, updateWorktreeMeta]
+    [worktrees, workspaceGroups, setWorkspaceGroups, updateWorktreesMeta]
   )
 
   const handleAssignDrop = useCallback(
@@ -2148,7 +2148,6 @@ const WorktreeList = React.memo(function WorktreeList({
       onToggleGroupCollapsed={handleToggleGroupCollapsed}
       onGroupRenameCommit={handleGroupRenameCommit}
       onGroupRenameCancel={handleGroupRenameCancel}
-      onGroupStartRename={handleGroupStartRename}
       onGroupRecolor={handleGroupRecolor}
       onGroupReorder={handleGroupReorder}
       onGroupUngroup={handleGroupUngroup}
