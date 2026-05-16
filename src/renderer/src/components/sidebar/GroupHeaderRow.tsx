@@ -5,9 +5,6 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
-  ContextMenuSub,
-  ContextMenuSubContent,
-  ContextMenuSubTrigger,
   ContextMenuTrigger
 } from '@/components/ui/context-menu'
 import type { WorkspaceGroupColor, WorkspaceGroupId } from '../../../../shared/types'
@@ -111,20 +108,18 @@ export function GroupHeaderRow({
       </ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuItem onSelect={() => onStartRename(groupId)}>Rename</ContextMenuItem>
-        <ContextMenuSub>
-          <ContextMenuSubTrigger>Change color</ContextMenuSubTrigger>
-          <ContextMenuSubContent>
-            {WORKSPACE_GROUP_COLOR_IDS.map((swatchColor) => (
-              <ContextMenuItem key={swatchColor} onSelect={() => onRecolor(groupId, swatchColor)}>
-                <span
-                  aria-hidden
-                  className={`inline-block w-2 h-2 rounded-full mr-2 ${getWorkspaceGroupSwatchClass(swatchColor)}`}
-                />
-                {swatchColor}
-              </ContextMenuItem>
-            ))}
-          </ContextMenuSubContent>
-        </ContextMenuSub>
+        <div role="group" aria-label="Change color" className="flex items-center gap-1 px-2 py-1.5">
+          {WORKSPACE_GROUP_COLOR_IDS.map((swatchColor) => (
+            <button
+              key={swatchColor}
+              type="button"
+              aria-label={`Set color ${swatchColor}`}
+              onClick={() => onRecolor(groupId, swatchColor)}
+              className={`inline-block w-4 h-4 rounded-full ${getWorkspaceGroupSwatchClass(swatchColor)} ${swatchColor === color ? 'ring-2 ring-offset-1 ring-offset-popover ring-foreground' : 'hover:opacity-80'}`}
+            />
+          ))}
+        </div>
+        <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => onToggleCollapsed(groupId)}>
           {collapsed ? 'Expand' : 'Collapse'}
         </ContextMenuItem>
