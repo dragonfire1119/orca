@@ -1146,13 +1146,25 @@ export function registerPtyHandlers(
           ? makePaneKey(args.tabId, args.leafId)
           : null
       const stablePaneKey = verifiedPaneKey ?? migrationUnsupportedPaneKey
-      const baseEnv = baseEnvWithAuth
-        ? { ...baseEnvWithAuth, ...(stablePaneKey ? { ORCA_PANE_KEY: stablePaneKey } : {}) }
-        : undefined
-      if (baseEnv && !stablePaneKey) {
+      const baseEnv = baseEnvWithAuth ? { ...baseEnvWithAuth } : undefined
+      if (baseEnv && stablePaneKey) {
+        baseEnv.ORCA_PANE_KEY = stablePaneKey
+        if (typeof args.tabId === 'string') {
+          baseEnv.ORCA_TAB_ID = args.tabId
+        } else if (!args.connectionId) {
+          delete baseEnv.ORCA_TAB_ID
+        }
+        if (typeof args.worktreeId === 'string') {
+          baseEnv.ORCA_WORKTREE_ID = args.worktreeId
+        } else if (!args.connectionId) {
+          delete baseEnv.ORCA_WORKTREE_ID
+        }
+      } else if (baseEnv) {
         // Why: ORCA_PANE_KEY crosses into shells and hook registries. Only the
         // key proven to match this spawn's tab+leaf may leave the IPC boundary.
         delete baseEnv.ORCA_PANE_KEY
+        delete baseEnv.ORCA_TAB_ID
+        delete baseEnv.ORCA_WORKTREE_ID
       }
       const validatedPaneKey = stablePaneKey
       const validatedLeafId = verifiedLeafId ?? metadataLeafId

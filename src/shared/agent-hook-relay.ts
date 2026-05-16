@@ -39,6 +39,7 @@ export type AgentHookSource =
   | 'pi'
   | 'droid'
   | 'grok'
+  | 'copilot'
 
 /** Env marker used by the remote relay. It is a transport/location marker, not
  *  a dev-vs-prod build tag, so main-process env mismatch diagnostics ignore it. */
