@@ -29,6 +29,7 @@ import type {
   Repo,
   WorktreeLineage,
   WorkspaceGroup,
+  WorkspaceGroupId,
   WorkspaceStatus,
   WorkspaceStatusDefinition
 } from '../../../../shared/types'
@@ -42,7 +43,7 @@ import {
 import { track } from '@/lib/telemetry'
 import { tabHasLivePty } from '@/lib/tab-has-live-pty'
 import {
-  type GroupHeaderRow,
+  type GroupHeaderRow as GroupHeaderRowData,
   type RepoGroupOrdering,
   type Row,
   type WorktreeGroupBy,
@@ -81,6 +82,8 @@ import {
 } from './worktree-multi-selection'
 import { branchDisplayName } from './WorktreeCardHelpers'
 import { callRuntimeRpc, getActiveRuntimeTarget } from '@/runtime/runtime-rpc-client'
+import { GroupHeaderRow } from './GroupHeaderRow'
+import { buildRenameGroup } from './workspace-group-actions'
 
 // How long to wait after a sortEpoch bump before actually re-sorting.
 // Prevents jarring position shifts when background events (AI starting work,
@@ -171,6 +174,11 @@ type VirtualizedWorktreeViewportProps = {
   prCache: Record<string, unknown> | null
   workspaceStatuses: readonly WorkspaceStatusDefinition[]
   workspaceGroups: readonly WorkspaceGroup[]
+  renamingGroupId: WorkspaceGroupId | null
+  onToggleGroupCollapsed: (groupId: WorkspaceGroupId) => void
+  onGroupRenameCommit: (groupId: WorkspaceGroupId, name: string) => void
+  onGroupRenameCancel: (groupId: WorkspaceGroupId) => void
+  onGroupHeaderContextMenu: (groupId: WorkspaceGroupId, e: React.MouseEvent) => void
   onMoveWorktreeToStatus: (worktreeId: string, status: WorkspaceStatus) => void
   onMoveWorktreesToStatus: (worktreeIds: readonly string[], status: WorkspaceStatus) => void
   onPinWorktree: (worktreeId: string) => void
@@ -291,6 +299,11 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
   prCache,
   workspaceStatuses,
   workspaceGroups,
+  renamingGroupId,
+  onToggleGroupCollapsed,
+  onGroupRenameCommit,
+  onGroupRenameCancel,
+  onGroupHeaderContextMenu,
   onMoveWorktreeToStatus,
   onMoveWorktreesToStatus,
   onPinWorktree,
@@ -846,6 +859,53 @@ const VirtualizedWorktreeViewport = React.memo(function VirtualizedWorktreeViewp
             return null
           }
 
+          if (row.type === 'header' && row.workspaceGroupId) {
+            return (
+              <div
+                key={vItem.key}
+                role="presentation"
+                data-worktree-virtual-row
+                data-worktree-virtual-row-key={String(vItem.key)}
+                data-index={vItem.index}
+                ref={virtualizer.measureElement}
+                className="absolute left-0 right-0"
+                style={{ transform: getVirtualRowTransform(vItem.start) }}
+              >
+                <GroupHeaderRow
+                  groupId={row.workspaceGroupId}
+                  name={row.label}
+                  color={row.workspaceGroupColor ?? 'neutral'}
+                  memberCount={row.count}
+                  collapsed={Boolean(row.collapsed)}
+                  isRenaming={renamingGroupId === row.workspaceGroupId}
+                  onToggleCollapsed={onToggleGroupCollapsed}
+                  onRenameCommit={onGroupRenameCommit}
+                  onRenameCancel={onGroupRenameCancel}
+                  onContextMenu={onGroupHeaderContextMenu}
+                />
+              </div>
+            )
+          }
+
+          if (row.type === 'header' && row.isUngroupedBucket) {
+            return (
+              <div
+                key={vItem.key}
+                role="presentation"
+                data-worktree-virtual-row
+                data-worktree-virtual-row-key={String(vItem.key)}
+                data-index={vItem.index}
+                ref={virtualizer.measureElement}
+                className="absolute left-0 right-0"
+                style={{ transform: getVirtualRowTransform(vItem.start) }}
+              >
+                <div className="px-2 py-1 text-xs uppercase tracking-wide text-muted-foreground">
+                  {row.label} <span className="ml-2">{row.count}</span>
+                </div>
+              </div>
+            )
+          }
+
           if (row.type === 'header') {
             const isRepoHeader = groupBy === 'repo' && row.repo !== undefined
             const repoIdForHeader = isRepoHeader ? row.repo!.id : undefined
@@ -1319,6 +1379,8 @@ const WorktreeList = React.memo(function WorktreeList({
   const groupBy = useAppStore((s) => s.groupBy)
   const workspaceStatuses = useAppStore((s) => s.workspaceStatuses)
   const workspaceGroups = useAppStore((s) => s.workspaceGroups)
+  const setWorkspaceGroups = useAppStore((s) => s.setWorkspaceGroups)
+  const toggleCollapsedGroup = useAppStore((s) => s.toggleCollapsedGroup)
   const sortBy = useAppStore((s) => s.sortBy)
   const showActiveOnly = useAppStore((s) => s.showActiveOnly)
   const hideDefaultBranchWorkspace = useAppStore((s) => s.hideDefaultBranchWorkspace)
@@ -1666,7 +1728,7 @@ const WorktreeList = React.memo(function WorktreeList({
   // to animate upward and for the scroll anchor to hold the viewport steady.
   const viewportResetKey = useMemo(() => {
     const headers = rows
-      .filter((r): r is GroupHeaderRow => r.type === 'header')
+      .filter((r): r is GroupHeaderRowData => r.type === 'header')
       .map((r) => r.key)
       .join(',')
     return `${groupBy}:lineage:${headers}`
@@ -1790,6 +1852,36 @@ const WorktreeList = React.memo(function WorktreeList({
       })
     },
     [openModal]
+  )
+
+  const [renamingGroupId, setRenamingGroupId] = useState<WorkspaceGroupId | null>(null)
+
+  const handleToggleGroupCollapsed = useCallback(
+    (groupId: WorkspaceGroupId) => {
+      const next = workspaceGroups.map((g) =>
+        g.id === groupId ? { ...g, collapsed: !g.collapsed } : g
+      )
+      setWorkspaceGroups(next)
+      toggleCollapsedGroup(`workspace-group:${groupId}`)
+    },
+    [workspaceGroups, setWorkspaceGroups, toggleCollapsedGroup]
+  )
+
+  const handleGroupRenameCommit = useCallback(
+    (groupId: WorkspaceGroupId, name: string) => {
+      setWorkspaceGroups(buildRenameGroup({ existing: workspaceGroups, groupId, name }))
+      setRenamingGroupId(null)
+    },
+    [workspaceGroups, setWorkspaceGroups]
+  )
+
+  const handleGroupRenameCancel = useCallback((_groupId: WorkspaceGroupId) => {
+    setRenamingGroupId(null)
+  }, [])
+
+  const handleGroupHeaderContextMenu = useCallback(
+    (_groupId: WorkspaceGroupId, _e: React.MouseEvent) => {},
+    []
   )
 
   const moveWorktreeToStatus = useCallback(
@@ -1924,6 +2016,11 @@ const WorktreeList = React.memo(function WorktreeList({
       prCache={prCache}
       workspaceStatuses={workspaceStatuses}
       workspaceGroups={workspaceGroups}
+      renamingGroupId={renamingGroupId}
+      onToggleGroupCollapsed={handleToggleGroupCollapsed}
+      onGroupRenameCommit={handleGroupRenameCommit}
+      onGroupRenameCancel={handleGroupRenameCancel}
+      onGroupHeaderContextMenu={handleGroupHeaderContextMenu}
       onMoveWorktreeToStatus={moveWorktreeToStatus}
       onMoveWorktreesToStatus={moveWorktreesToStatus}
       onPinWorktree={pinWorktree}
