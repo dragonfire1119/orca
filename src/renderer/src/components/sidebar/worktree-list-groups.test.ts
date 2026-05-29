@@ -3,17 +3,22 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
+  ALL_GROUP_META,
   buildRows,
-  clusterWorkspaceGroupMembers,
   getGroupKeyForWorktree,
+  getGroupKeysForWorktree,
   getLineageGroupKey,
   getLineageRenderInfo,
   getPRGroupKey,
-  getRepoGroupOrdering
+  getProjectGroupOrdering
 } from './worktree-list-groups'
-import type { Row, WorktreeRow, GroupHeaderRow } from './worktree-list-groups'
-import type { Repo, Worktree, WorktreeLineage, WorkspaceGroup } from '../../../../shared/types'
-import type { WorktreeGroupBy } from './worktree-list-groups'
+import type {
+  Repo,
+  ProjectGroup,
+  Worktree,
+  WorktreeLineage,
+  WorkspaceGroup
+} from '../../../../shared/types'
 
 const repo: Repo = {
   id: 'repo-1',
@@ -48,23 +53,84 @@ const repoMap = new Map([[repo.id, repo]])
 describe('getPRGroupKey', () => {
   it('puts merged PRs in the done group', () => {
     const prCache = {
-      '/tmp/orca::feature/super-critical': {
+      'repo-1::feature/super-critical': {
         data: { state: 'merged' }
       }
     }
 
     expect(getPRGroupKey(worktree, repoMap, prCache)).toBe('done')
   })
+
+  it('prefers repo-scoped PR status over stale legacy path-scoped status', () => {
+    const prCache = {
+      '/tmp/orca::feature/super-critical': {
+        data: { state: 'closed' }
+      },
+      'repo-1::feature/super-critical': {
+        data: { state: 'merged' }
+      }
+    }
+
+    expect(getPRGroupKey(worktree, repoMap, prCache)).toBe('done')
+  })
+
+  it('falls back to legacy path-scoped PR status when no repo-scoped entry exists', () => {
+    const prCache = {
+      '/tmp/orca::feature/super-critical': {
+        data: { state: 'closed' }
+      }
+    }
+
+    expect(getPRGroupKey(worktree, repoMap, prCache)).toBe('closed')
+  })
+
+  it('does not fall back to local PR cache while runtime scoped data is loading', () => {
+    const prCache = {
+      'repo-1::feature/super-critical': {
+        data: { state: 'merged' }
+      }
+    }
+
+    expect(
+      getPRGroupKey(worktree, repoMap, prCache, {
+        activeRuntimeEnvironmentId: 'env-1'
+      } as never)
+    ).toBe('in-progress')
+  })
+
+  it('uses SSH-scoped PR cache entries instead of local entries for SSH repos', () => {
+    const sshRepo = { ...repo, connectionId: 'ssh-1' }
+    const sshRepoMap = new Map([[sshRepo.id, sshRepo]])
+    const prCache = {
+      'repo-1::feature/super-critical': {
+        data: { state: 'merged' }
+      },
+      'ssh:ssh-1::repo-1::feature/super-critical': {
+        data: { state: 'closed' }
+      }
+    }
+
+    expect(getPRGroupKey(worktree, sshRepoMap, prCache)).toBe('closed')
+  })
 })
 
 describe('getGroupKeyForWorktree', () => {
-  it('returns no group key for the ungrouped mode', () => {
-    expect(getGroupKeyForWorktree('none', worktree, repoMap, null)).toBeNull()
+  it('returns the all group key for the ungrouped mode', () => {
+    expect(getGroupKeyForWorktree('none', worktree, repoMap, null)).toBe('all')
   })
 
   it('returns a workspace-status key only in status grouping mode', () => {
     expect(getGroupKeyForWorktree('workspace-status', worktree, repoMap, null)).toBe(
       'workspace-status:in-progress'
+    )
+  })
+
+  it('returns a workspace group key in workspace-group mode', () => {
+    expect(
+      getGroupKeyForWorktree('group', { ...worktree, workspaceGroupId: 'wg_a' }, repoMap, null)
+    ).toBe('workspace-group:wg_a')
+    expect(getGroupKeyForWorktree('group', worktree, repoMap, null)).toBe(
+      'workspace-group:ungrouped'
     )
   })
 })
@@ -74,29 +140,125 @@ describe('buildRows with pinned worktrees', () => {
   const unpinned1 = { ...worktree, id: 'wt-1', displayName: 'alpha' }
   const unpinned2 = { ...worktree, id: 'wt-2', displayName: 'beta' }
 
-  it('emits a Pinned header followed by pinned items in groupBy none', () => {
+  it('emits Pinned and All headers in groupBy none', () => {
     const rows = buildRows('none', [unpinned1, pinned, unpinned2], repoMap, null, new Set())
     expect(rows[0]).toMatchObject({ type: 'header', key: 'pinned', label: 'Pinned', count: 1 })
     expect(rows[1]).toMatchObject({ type: 'item', worktree: { id: 'wt-pinned' } })
+    expect(rows[2]).toMatchObject({ type: 'header', key: 'all', label: 'All', count: 2 })
+    expect(rows[2]).toMatchObject({ type: 'header', icon: ALL_GROUP_META.icon })
   })
 
-  it('renders a flat list without status headers in groupBy none', () => {
+  it('groups all worktrees under All in groupBy none', () => {
     const rows = buildRows('none', [unpinned1, unpinned2], repoMap, null, new Set())
 
     expect(rows).toMatchObject([
+      { type: 'header', key: 'all', label: 'All', count: 2 },
       { type: 'item', worktree: { id: 'wt-1' } },
       { type: 'item', worktree: { id: 'wt-2' } }
     ])
   })
 
-  it('keeps pinned worktrees above the flat list', () => {
+  it('clusters workspace group members inside the existing All section', () => {
+    const groups: WorkspaceGroup[] = [
+      { id: 'wg_a', name: 'Feature', color: 'blue', sortOrder: 0, createdAt: 0 }
+    ]
+    const rows = buildRows(
+      'none',
+      [
+        { ...unpinned1, id: 'wt-1', workspaceGroupId: 'wg_a' },
+        { ...unpinned2, id: 'wt-2' },
+        { ...worktree, id: 'wt-3', displayName: 'gamma', workspaceGroupId: 'wg_a' }
+      ],
+      repoMap,
+      null,
+      new Set(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      undefined,
+      [],
+      new Set(),
+      groups
+    )
+
+    expect(rows.map((row) => (row.type === 'item' ? row.worktree.id : row.key))).toEqual([
+      'all',
+      'wt-1',
+      'wt-3',
+      'wt-2'
+    ])
+    expect(rows[1]).toMatchObject({ type: 'item', groupColor: 'blue' })
+  })
+
+  it('emits workspace group headers and an ungrouped bucket in groupBy group', () => {
+    const groups: WorkspaceGroup[] = [
+      { id: 'wg_b', name: 'Later', color: 'rose', sortOrder: 10, createdAt: 0 },
+      { id: 'wg_a', name: 'Checkout', color: 'blue', sortOrder: 0, createdAt: 0 }
+    ]
+    const rows = buildRows(
+      'group',
+      [
+        { ...unpinned1, id: 'wt-1', workspaceGroupId: 'wg_a' },
+        { ...unpinned2, id: 'wt-2' },
+        { ...worktree, id: 'wt-3', displayName: 'gamma', workspaceGroupId: 'wg_b' }
+      ],
+      repoMap,
+      null,
+      new Set(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      undefined,
+      [],
+      new Set(),
+      groups
+    )
+
+    expect(rows).toMatchObject([
+      {
+        type: 'header',
+        key: 'workspace-group:wg_a',
+        label: 'Checkout',
+        workspaceGroupColor: 'blue'
+      },
+      { type: 'item', worktree: { id: 'wt-1' }, groupColor: 'blue' },
+      {
+        type: 'header',
+        key: 'workspace-group:wg_b',
+        label: 'Later',
+        workspaceGroupColor: 'rose'
+      },
+      { type: 'item', worktree: { id: 'wt-3' }, groupColor: 'rose' },
+      { type: 'header', key: 'workspace-group:ungrouped', label: 'Ungrouped', count: 1 },
+      { type: 'item', worktree: { id: 'wt-2' } }
+    ])
+  })
+
+  it('keeps pinned worktrees above the All group', () => {
     const rows = buildRows('none', [unpinned1, pinned, unpinned2], repoMap, null, new Set())
 
     expect(rows).toMatchObject([
       { type: 'header', key: 'pinned', count: 1 },
       { type: 'item', worktree: { id: 'wt-pinned' } },
+      { type: 'header', key: 'all', count: 2 },
       { type: 'item', worktree: { id: 'wt-1' } },
       { type: 'item', worktree: { id: 'wt-2' } }
+    ])
+  })
+
+  it('collapses the All group in groupBy none', () => {
+    const rows = buildRows('none', [unpinned1, pinned, unpinned2], repoMap, null, new Set(['all']))
+
+    expect(rows).toMatchObject([
+      { type: 'header', key: 'pinned', count: 1 },
+      { type: 'item', worktree: { id: 'wt-pinned' } },
+      { type: 'header', key: 'all', count: 2 }
     ])
   })
 
@@ -244,7 +406,7 @@ describe('buildRows with pinned worktrees', () => {
   })
 })
 
-describe('buildRows repo grouping order', () => {
+describe('buildRows project grouping order', () => {
   const repoA: Repo = { ...repo, id: 'repo-a', displayName: 'alpha' }
   const repoB: Repo = { ...repo, id: 'repo-b', displayName: 'beta' }
   const repoC: Repo = { ...repo, id: 'repo-c', displayName: 'gamma' }
@@ -330,7 +492,7 @@ describe('buildRows repo grouping order', () => {
     ])
   })
 
-  it('keeps repoOrder for manual repo group ordering', () => {
+  it('keeps repoOrder for manual project group ordering', () => {
     const repoOrder = new Map([
       [repoB.id, 0],
       [repoA.id, 1],
@@ -342,7 +504,7 @@ describe('buildRows repo grouping order', () => {
   })
 })
 
-describe('getRepoGroupOrdering', () => {
+describe('getProjectGroupOrdering', () => {
   it.each([
     ['repo', 'recent', 'visible-worktree-order'],
     ['repo', 'smart', 'visible-worktree-order'],
@@ -352,7 +514,373 @@ describe('getRepoGroupOrdering', () => {
     ['workspace-status', 'recent', 'manual'],
     ['pr-status', 'recent', 'manual']
   ] as const)('uses %s/%s -> %s', (groupBy, sortBy, expected) => {
-    expect(getRepoGroupOrdering(groupBy, sortBy)).toBe(expected)
+    expect(getProjectGroupOrdering(groupBy, sortBy)).toBe(expected)
+  })
+})
+
+describe('project groups', () => {
+  it('keeps empty project groups visible in project grouping mode', () => {
+    const group: ProjectGroup = {
+      id: 'group-1',
+      name: 'Platform',
+      parentPath: null,
+      parentGroupId: null,
+      createdFrom: 'manual',
+      tabOrder: 0,
+      isCollapsed: false,
+      color: null,
+      createdAt: 1,
+      updatedAt: 1
+    }
+
+    const rows = buildRows(
+      'repo',
+      [],
+      new Map(),
+      null,
+      new Set(),
+      undefined,
+      undefined,
+      undefined,
+      {},
+      new Map(),
+      false,
+      undefined,
+      [group]
+    )
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        type: 'header',
+        key: 'project-group:group-1',
+        label: 'Platform',
+        count: 0,
+        projectGroup: group
+      })
+    ])
+  })
+
+  it('counts grouped repos before their visible worktrees are loaded', () => {
+    const group: ProjectGroup = {
+      id: 'group-1',
+      name: 'Platform',
+      parentPath: '/platform',
+      parentGroupId: null,
+      createdFrom: 'folder-scan',
+      tabOrder: 0,
+      isCollapsed: false,
+      color: null,
+      createdAt: 1,
+      updatedAt: 1
+    }
+    const groupedRepo: Repo = { ...repo, projectGroupId: group.id }
+
+    const rows = buildRows(
+      'repo',
+      [],
+      new Map([[groupedRepo.id, groupedRepo]]),
+      null,
+      new Set(),
+      undefined,
+      undefined,
+      undefined,
+      {},
+      new Map(),
+      false,
+      undefined,
+      [group],
+      new Set([groupedRepo.id])
+    )
+
+    expect(rows[0]).toMatchObject({
+      type: 'header',
+      key: 'project-group:group-1',
+      count: 1
+    })
+  })
+
+  it('does not resurrect filtered repos as empty Project Group headers', () => {
+    const group: ProjectGroup = {
+      id: 'group-1',
+      name: 'Platform',
+      parentPath: '/platform',
+      parentGroupId: null,
+      createdFrom: 'folder-scan',
+      tabOrder: 0,
+      isCollapsed: false,
+      color: null,
+      createdAt: 1,
+      updatedAt: 1
+    }
+    const groupedRepo: Repo = { ...repo, projectGroupId: group.id }
+
+    const rows = buildRows(
+      'repo',
+      [],
+      new Map([[groupedRepo.id, groupedRepo]]),
+      null,
+      new Set(),
+      undefined,
+      undefined,
+      undefined,
+      {},
+      new Map(),
+      false,
+      undefined,
+      [group]
+    )
+
+    expect(rows.filter((row) => row.type === 'header').map((row) => row.key)).toEqual([
+      'project-group:group-1'
+    ])
+    expect(rows[0]).toMatchObject({ count: 0 })
+  })
+
+  it('renders ungrouped repos as top-level repo rows when Project Groups exist', () => {
+    const group: ProjectGroup = {
+      id: 'group-1',
+      name: 'Platform',
+      parentPath: '/platform',
+      parentGroupId: null,
+      createdFrom: 'folder-scan',
+      tabOrder: 0,
+      isCollapsed: false,
+      color: null,
+      createdAt: 1,
+      updatedAt: 1
+    }
+
+    const rows = buildRows(
+      'repo',
+      [worktree],
+      repoMap,
+      null,
+      new Set(),
+      new Map([[repo.id, 0]]),
+      undefined,
+      'manual',
+      {},
+      new Map([[worktree.id, worktree]]),
+      false,
+      undefined,
+      [group]
+    )
+
+    expect(rows.filter((row) => row.type === 'header').map((row) => row.key)).toEqual([
+      'project-group:group-1',
+      'repo:repo-1'
+    ])
+  })
+
+  it('orders repos inside a Project Group by projectGroupOrder in manual mode', () => {
+    const group: ProjectGroup = {
+      id: 'group-1',
+      name: 'Platform',
+      parentPath: '/platform',
+      parentGroupId: null,
+      createdFrom: 'folder-scan',
+      tabOrder: 0,
+      isCollapsed: false,
+      color: null,
+      createdAt: 1,
+      updatedAt: 1
+    }
+    const repoA: Repo = {
+      ...repo,
+      id: 'repo-a',
+      displayName: 'alpha',
+      projectGroupId: group.id,
+      projectGroupOrder: 1
+    }
+    const repoB: Repo = {
+      ...repo,
+      id: 'repo-b',
+      displayName: 'beta',
+      projectGroupId: group.id,
+      projectGroupOrder: 0
+    }
+    const worktreeA: Worktree = { ...worktree, id: 'wt-a', repoId: repoA.id }
+    const worktreeB: Worktree = { ...worktree, id: 'wt-b', repoId: repoB.id }
+    const groupedMap = new Map([
+      [repoA.id, repoA],
+      [repoB.id, repoB]
+    ])
+    const repoOrder = new Map([
+      [repoA.id, 0],
+      [repoB.id, 1]
+    ])
+
+    const rows = buildRows(
+      'repo',
+      [worktreeA, worktreeB],
+      groupedMap,
+      null,
+      new Set(),
+      repoOrder,
+      undefined,
+      'manual',
+      undefined,
+      undefined,
+      false,
+      undefined,
+      [group]
+    )
+
+    expect(rows.filter((row) => row.type === 'header').map((row) => row.key)).toEqual([
+      'project-group:group-1',
+      'repo:repo-b',
+      'repo:repo-a'
+    ])
+  })
+
+  it('renders nested Project Groups before repos assigned to their leaf group', () => {
+    const rootGroup: ProjectGroup = {
+      id: 'group-root',
+      name: 'Services',
+      parentPath: '/monorepo',
+      parentGroupId: null,
+      createdFrom: 'folder-scan',
+      tabOrder: 0,
+      isCollapsed: false,
+      color: null,
+      createdAt: 1,
+      updatedAt: 1
+    }
+    const childGroup: ProjectGroup = {
+      ...rootGroup,
+      id: 'group-payments',
+      name: 'payments',
+      parentPath: '/monorepo/services/payments',
+      parentGroupId: rootGroup.id,
+      tabOrder: 1
+    }
+    const groupedRepo: Repo = {
+      ...repo,
+      id: 'repo-payments-api',
+      displayName: 'api',
+      projectGroupId: childGroup.id,
+      projectGroupOrder: 0
+    }
+    const groupedWorktree: Worktree = {
+      ...worktree,
+      id: 'wt-payments-api',
+      repoId: groupedRepo.id
+    }
+
+    const rows = buildRows(
+      'repo',
+      [groupedWorktree],
+      new Map([[groupedRepo.id, groupedRepo]]),
+      null,
+      new Set(),
+      new Map([[groupedRepo.id, 0]]),
+      undefined,
+      'manual',
+      undefined,
+      undefined,
+      false,
+      undefined,
+      [rootGroup, childGroup]
+    )
+
+    expect(rows.filter((row) => row.type === 'header').map((row) => row.key)).toEqual([
+      'project-group:group-root',
+      'project-group:group-payments',
+      'repo:repo-payments-api'
+    ])
+    expect(rows.filter((row) => row.type === 'header').map((row) => row.projectGroupDepth)).toEqual(
+      [0, 1, 2]
+    )
+    expect(rows[0]).toMatchObject({ count: 1 })
+  })
+
+  it('renders imported repos under nested Project Groups before worktree rows load', () => {
+    const rootGroup: ProjectGroup = {
+      id: 'group-root',
+      name: 'Root',
+      parentPath: '/monorepo',
+      parentGroupId: null,
+      createdFrom: 'folder-scan',
+      tabOrder: 0,
+      isCollapsed: false,
+      color: null,
+      createdAt: 1,
+      updatedAt: 1
+    }
+    const platformGroup: ProjectGroup = {
+      ...rootGroup,
+      id: 'group-platform',
+      name: 'Platform',
+      parentGroupId: rootGroup.id,
+      tabOrder: 1
+    }
+    const servicesGroup: ProjectGroup = {
+      ...rootGroup,
+      id: 'group-services',
+      name: 'Services',
+      parentGroupId: platformGroup.id,
+      tabOrder: 2
+    }
+    const serviceA: Repo = {
+      ...repo,
+      id: 'repo-service-a',
+      displayName: 'service-a',
+      projectGroupId: servicesGroup.id,
+      projectGroupOrder: 0
+    }
+    const serviceB: Repo = {
+      ...repo,
+      id: 'repo-service-b',
+      displayName: 'service-b',
+      projectGroupId: servicesGroup.id,
+      projectGroupOrder: 1
+    }
+
+    const rows = buildRows(
+      'repo',
+      [],
+      new Map([
+        [serviceA.id, serviceA],
+        [serviceB.id, serviceB]
+      ]),
+      null,
+      new Set(),
+      new Map([
+        [serviceA.id, 0],
+        [serviceB.id, 1]
+      ]),
+      undefined,
+      'manual',
+      undefined,
+      undefined,
+      false,
+      undefined,
+      [rootGroup, platformGroup, servicesGroup],
+      new Set([serviceA.id, serviceB.id])
+    )
+
+    expect(rows.filter((row) => row.type === 'header').map((row) => row.key)).toEqual([
+      'project-group:group-root',
+      'project-group:group-platform',
+      'project-group:group-services',
+      'repo:repo-service-a',
+      'repo:repo-service-b'
+    ])
+    expect(rows.filter((row) => row.type === 'header').map((row) => row.count)).toEqual([
+      2, 2, 2, 0, 0
+    ])
+  })
+
+  it('returns both parent Project Group and repo keys for grouped repo reveals', () => {
+    const groupedRepo: Repo = { ...repo, projectGroupId: 'group-1' }
+
+    expect(
+      getGroupKeysForWorktree('repo', worktree, new Map([[groupedRepo.id, groupedRepo]]), null)
+    ).toEqual(['project-group:group-1', 'repo:repo-1'])
+  })
+
+  it('returns only the repo key for ungrouped repo reveals', () => {
+    expect(getGroupKeysForWorktree('repo', worktree, repoMap, null)).toEqual(['repo:repo-1'])
   })
 })
 
@@ -443,8 +971,7 @@ describe('buildRows workspace lineage nesting', () => {
     expect(items[1]).toMatchObject({
       type: 'item',
       worktree: { id: child.id },
-      depth: 1,
-      parentLabel: 'coordinator'
+      depth: 1
     })
   })
 
@@ -518,7 +1045,7 @@ describe('buildRows workspace lineage nesting', () => {
     })
   })
 
-  it('marks stale instance links as missing without creating a parent group', () => {
+  it('does not create a parent group for stale instance links', () => {
     const staleLineage = { ...lineage, parentWorktreeInstanceId: 'old-parent-instance' }
     const rows = buildRows(
       'none',
@@ -541,7 +1068,7 @@ describe('buildRows workspace lineage nesting', () => {
     expect(items[0]).toMatchObject({
       type: 'item',
       worktree: { id: child.id },
-      lineageState: 'missing'
+      depth: 0
     })
   })
 
@@ -559,7 +1086,7 @@ describe('buildRows workspace lineage nesting', () => {
     expect(info).toMatchObject({ state: 'missing' })
   })
 
-  it('keeps pinned children in Pinned with parent context', () => {
+  it('keeps pinned children in Pinned without a parent badge', () => {
     const pinnedChild = { ...child, isPinned: true }
     const rows = buildRows(
       'none',
@@ -581,9 +1108,9 @@ describe('buildRows workspace lineage nesting', () => {
     expect(rows[0]).toMatchObject({ type: 'header', key: 'pinned' })
     expect(rows[1]).toMatchObject({
       type: 'item',
-      worktree: { id: child.id },
-      parentLabel: 'coordinator'
+      worktree: { id: child.id }
     })
+    expect(rows[1]).not.toHaveProperty('parentLabel')
   })
 })
 
@@ -605,212 +1132,15 @@ describe('WorktreeList header styles', () => {
 
     expect(source).toContain('[&_path]:cursor-pointer')
   })
-})
 
-const wt = (over: Partial<Worktree>): Worktree => ({ ...worktree, ...over })
-
-const grp = (over: Partial<WorkspaceGroup>): WorkspaceGroup => ({
-  id: 'wg_a',
-  name: 'A',
-  color: 'blue',
-  sortOrder: 0,
-  createdAt: 0,
-  ...over
-})
-
-function callBuildRows(args: {
-  worktrees: Worktree[]
-  workspaceGroups: WorkspaceGroup[]
-  groupBy: WorktreeGroupBy
-}) {
-  return buildRows(
-    args.groupBy,
-    args.worktrees,
-    repoMap,
-    null,
-    new Set<string>(),
-    undefined,
-    undefined,
-    'manual',
-    {},
-    undefined,
-    false,
-    args.workspaceGroups
-  )
-}
-
-describe('buildRows groupBy=group', () => {
-  const workspaceGroups: WorkspaceGroup[] = [
-    grp({ id: 'wg_a', name: 'A', sortOrder: 0 }),
-    grp({ id: 'wg_b', name: 'B', sortOrder: 1 })
-  ]
-
-  it('partitions worktrees under matching workspace-group headers', () => {
-    const rows = callBuildRows({
-      worktrees: [
-        wt({ id: 'wt1', workspaceGroupId: 'wg_a' }),
-        wt({ id: 'wt2', workspaceGroupId: 'wg_b' }),
-        wt({ id: 'wt3', workspaceGroupId: null })
-      ],
-      workspaceGroups,
-      groupBy: 'group'
-    })
-    const headerA = rows.find((r) => r.type === 'header' && r.key === 'workspace-group:wg_a')
-    const ungrouped = rows.find((r) => r.type === 'header' && r.key === 'ungrouped')
-    expect(headerA).toBeDefined()
-    expect(ungrouped).toBeDefined()
-    const headerAIdx = rows.indexOf(headerA!)
-    const ungroupedIdx = rows.indexOf(ungrouped!)
-    expect(headerAIdx).toBeLessThan(ungroupedIdx)
-  })
-
-  it('omits members of a collapsed group', () => {
-    const rows = callBuildRows({
-      worktrees: [wt({ id: 'wt1', workspaceGroupId: 'wg_a' })],
-      workspaceGroups: [grp({ id: 'wg_a', collapsed: true })],
-      groupBy: 'group'
-    })
-    expect(rows.some((r) => r.type === 'item')).toBe(false)
-    expect(rows.some((r) => r.type === 'header' && r.key === 'workspace-group:wg_a')).toBe(true)
-  })
-
-  it('renders empty groups as header-only in group view', () => {
-    const rows = callBuildRows({
-      worktrees: [],
-      workspaceGroups: [grp({ id: 'wg_a' })],
-      groupBy: 'group'
-    })
-    expect(rows.some((r) => r.type === 'header' && r.key === 'workspace-group:wg_a')).toBe(true)
-  })
-
-  it('places pinned worktrees in the pinned section ahead of group headers', () => {
-    const rows = callBuildRows({
-      worktrees: [wt({ id: 'wt1', isPinned: true, workspaceGroupId: 'wg_a' })],
-      workspaceGroups,
-      groupBy: 'group'
-    })
-    const pinnedHeaderIdx = rows.findIndex((r) => r.type === 'header' && r.key === 'pinned')
-    const groupHeaderIdx = rows.findIndex(
-      (r) => r.type === 'header' && r.key === 'workspace-group:wg_a'
+  it('resolves repo header color from project group headers only', () => {
+    const source = readFileSync(
+      fileURLToPath(new URL('./WorktreeList.tsx', import.meta.url)),
+      'utf8'
     )
-    expect(pinnedHeaderIdx).toBeGreaterThanOrEqual(0)
-    expect(groupHeaderIdx).toBeGreaterThan(pinnedHeaderIdx)
-  })
-})
 
-describe('buildRows other modes — groupColor carries across', () => {
-  for (const mode of ['flat', 'none', 'repo', 'pr-status'] as const) {
-    it(`returns row.groupColor for a grouped worktree in '${mode}' view`, () => {
-      const rows = callBuildRows({
-        worktrees: [wt({ id: 'wt1', workspaceGroupId: 'wg_a' })],
-        workspaceGroups: [grp({ id: 'wg_a', color: 'rose' })],
-        groupBy: mode
-      })
-      const item = rows.find((r) => r.type === 'item') as { groupColor?: string } | undefined
-      expect(item?.groupColor).toBe('rose')
-    })
-  }
-})
-
-describe('clusterWorkspaceGroupMembers', () => {
-  const wgrp = (id: string): WorkspaceGroup => ({
-    id,
-    name: id,
-    color: 'blue',
-    sortOrder: 0,
-    createdAt: 0
-  })
-
-  const item = (id: string, groupId: string | null = null): WorktreeRow =>
-    ({
-      type: 'item',
-      worktree: { id, workspaceGroupId: groupId } as Worktree,
-      repo: undefined,
-      depth: 0,
-      lineageTrail: [],
-      isLastLineageChild: false,
-      lineageChildCount: 0
-    }) as WorktreeRow
-
-  const header = (key: string): GroupHeaderRow => ({
-    type: 'header',
-    key,
-    label: key,
-    count: 0,
-    tone: ''
-  })
-
-  it('returns unchanged rows when no groups exist', () => {
-    const rows: Row[] = [item('a', null), item('b', null)]
-    const out = clusterWorkspaceGroupMembers(rows, [])
-    expect(out).toEqual(rows)
-  })
-
-  it('clusters members of same group within a single segment', () => {
-    const groups = [wgrp('g1')]
-    const rows: Row[] = [item('a', 'g1'), item('b', null), item('c', 'g1'), item('d', null)]
-    const out = clusterWorkspaceGroupMembers(rows, groups)
-    const ids = out.filter((r): r is WorktreeRow => r.type === 'item').map((r) => r.worktree.id)
-    expect(ids).toEqual(['a', 'c', 'b', 'd'])
-  })
-
-  it('does NOT cross header boundaries', () => {
-    const groups = [wgrp('g1')]
-    const rows: Row[] = [
-      header('repo:A'),
-      item('a', 'g1'),
-      item('b', null),
-      header('repo:B'),
-      item('c', 'g1'),
-      item('d', null)
-    ]
-    const out = clusterWorkspaceGroupMembers(rows, groups)
-    const flat = out.map((r) =>
-      r.type === 'header' ? `H:${r.key}` : (r as WorktreeRow).worktree.id
-    )
-    expect(flat).toEqual(['H:repo:A', 'a', 'b', 'H:repo:B', 'c', 'd'])
-  })
-
-  it('clusters within multiple segments independently', () => {
-    const groups = [wgrp('g1'), wgrp('g2')]
-    const rows: Row[] = [
-      header('h1'),
-      item('a', 'g1'),
-      item('b', null),
-      item('c', 'g1'),
-      header('h2'),
-      item('d', 'g2'),
-      item('e', null),
-      item('f', 'g2')
-    ]
-    const out = clusterWorkspaceGroupMembers(rows, groups)
-    const flat = out.map((r) =>
-      r.type === 'header' ? `H:${r.key}` : (r as WorktreeRow).worktree.id
-    )
-    expect(flat).toEqual(['H:h1', 'a', 'c', 'b', 'H:h2', 'd', 'f', 'e'])
-  })
-
-  it('handles items before the first header', () => {
-    const groups = [wgrp('g1')]
-    const rows: Row[] = [
-      item('a', 'g1'),
-      item('b', null),
-      item('c', 'g1'),
-      header('h1'),
-      item('d', null)
-    ]
-    const out = clusterWorkspaceGroupMembers(rows, groups)
-    const flat = out.map((r) =>
-      r.type === 'header' ? `H:${r.key}` : (r as WorktreeRow).worktree.id
-    )
-    expect(flat).toEqual(['a', 'c', 'b', 'H:h1', 'd'])
-  })
-
-  it('ignores items in invalid (deleted) groups', () => {
-    const groups = [wgrp('g1')]
-    const rows: Row[] = [item('a', 'g_missing'), item('b', null), item('c', 'g_missing')]
-    const out = clusterWorkspaceGroupMembers(rows, groups)
-    const ids = out.filter((r): r is WorktreeRow => r.type === 'item').map((r) => r.worktree.id)
-    expect(ids).toEqual(['a', 'b', 'c'])
+    expect(source).toContain('resolveProjectGroupHeaderColor({')
+    expect(source).toContain('headerKey: row.key')
+    expect(source).toContain('color={repoHeaderColor}')
   })
 })

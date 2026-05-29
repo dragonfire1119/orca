@@ -1,48 +1,151 @@
 import { describe, expect, it } from 'vitest'
-import { clusterByWorkspaceGroup } from './workspace-kanban-worktree-groups'
 import type { Worktree } from '../../../../shared/types'
+import { groupWorkspaceKanbanWorktrees } from './workspace-kanban-worktree-groups'
 
-const wt = (id: string, groupId: string | null = null, isPinned = false): Worktree =>
-  ({ id, workspaceGroupId: groupId, isPinned }) as Worktree
+function worktree({
+  id,
+  displayName,
+  ...overrides
+}: Partial<Worktree> & Pick<Worktree, 'id' | 'displayName'>): Worktree {
+  return {
+    repoId: 'repo',
+    path: `/tmp/${id}`,
+    head: 'head',
+    branch: displayName,
+    isBare: false,
+    isMainWorktree: false,
+    id,
+    displayName,
+    comment: '',
+    linkedIssue: null,
+    linkedPR: null,
+    linkedLinearIssue: null,
+    isArchived: false,
+    isUnread: false,
+    isPinned: false,
+    sortOrder: 0,
+    lastActivityAt: 0,
+    ...overrides
+  } as Worktree
+}
 
-describe('clusterByWorkspaceGroup', () => {
-  it('no-ops on 0 or 1 item', () => {
-    const empty: Worktree[] = []
-    clusterByWorkspaceGroup(empty)
-    expect(empty).toEqual([])
-    const one = [wt('a', 'g1')]
-    clusterByWorkspaceGroup(one)
-    expect(one.map((w) => w.id)).toEqual(['a'])
+const statuses = [
+  { id: 'todo', label: 'Todo' },
+  { id: 'doing', label: 'Doing' }
+]
+
+describe('groupWorkspaceKanbanWorktrees', () => {
+  it('uses manualOrder inside lanes when Manual sort is active', () => {
+    const grouped = groupWorkspaceKanbanWorktrees({
+      worktrees: [
+        worktree({
+          id: 'a',
+          displayName: 'A',
+          workspaceStatus: 'doing',
+          manualOrder: 100,
+          lastActivityAt: 10
+        }),
+        worktree({
+          id: 'b',
+          displayName: 'B',
+          workspaceStatus: 'doing',
+          manualOrder: 300,
+          lastActivityAt: 1
+        }),
+        worktree({
+          id: 'c',
+          displayName: 'C',
+          workspaceStatus: 'doing',
+          manualOrder: 200,
+          lastActivityAt: 50
+        })
+      ],
+      visibleWorktreeIds: new Set(['a', 'b', 'c']),
+      workspaceStatuses: statuses,
+      sortBy: 'manual'
+    })
+
+    expect(grouped.get('doing')?.map((item) => item.id)).toEqual(['b', 'c', 'a'])
   })
 
-  it('keeps order when no groups present', () => {
-    const items = [wt('a'), wt('b'), wt('c')]
-    clusterByWorkspaceGroup(items)
-    expect(items.map((w) => w.id)).toEqual(['a', 'b', 'c'])
+  it('keeps pinned then recent ordering outside Manual sort', () => {
+    const grouped = groupWorkspaceKanbanWorktrees({
+      worktrees: [
+        worktree({
+          id: 'a',
+          displayName: 'A',
+          workspaceStatus: 'doing',
+          isPinned: false,
+          lastActivityAt: 50
+        }),
+        worktree({
+          id: 'b',
+          displayName: 'B',
+          workspaceStatus: 'doing',
+          isPinned: true,
+          lastActivityAt: 1
+        })
+      ],
+      visibleWorktreeIds: new Set(['a', 'b']),
+      workspaceStatuses: statuses,
+      sortBy: 'recent'
+    })
+
+    expect(grouped.get('doing')?.map((item) => item.id)).toEqual(['b', 'a'])
   })
 
-  it('clusters members of same group adjacent to first occurrence', () => {
-    const items = [wt('a', 'g1'), wt('b'), wt('c', 'g1'), wt('d')]
-    clusterByWorkspaceGroup(items)
-    expect(items.map((w) => w.id)).toEqual(['a', 'c', 'b', 'd'])
+  it('clusters unpinned workspace group members within a lane', () => {
+    const grouped = groupWorkspaceKanbanWorktrees({
+      worktrees: [
+        worktree({
+          id: 'a',
+          displayName: 'A',
+          workspaceStatus: 'doing',
+          workspaceGroupId: 'wg_a',
+          lastActivityAt: 50
+        }),
+        worktree({ id: 'b', displayName: 'B', workspaceStatus: 'doing', lastActivityAt: 40 }),
+        worktree({
+          id: 'c',
+          displayName: 'C',
+          workspaceStatus: 'doing',
+          workspaceGroupId: 'wg_a',
+          lastActivityAt: 30
+        })
+      ],
+      visibleWorktreeIds: new Set(['a', 'b', 'c']),
+      workspaceStatuses: statuses,
+      sortBy: 'recent'
+    })
+
+    expect(grouped.get('doing')?.map((item) => item.id)).toEqual(['a', 'c', 'b'])
   })
 
-  it('handles multiple groups', () => {
-    const items = [wt('a', 'g1'), wt('b', 'g2'), wt('c', 'g1'), wt('d', 'g2'), wt('e')]
-    clusterByWorkspaceGroup(items)
-    expect(items.map((w) => w.id)).toEqual(['a', 'c', 'b', 'd', 'e'])
-  })
+  it('does not pull pinned workspaces into an unpinned group cluster', () => {
+    const grouped = groupWorkspaceKanbanWorktrees({
+      worktrees: [
+        worktree({
+          id: 'a',
+          displayName: 'A',
+          workspaceStatus: 'doing',
+          workspaceGroupId: 'wg_a',
+          isPinned: true,
+          lastActivityAt: 1
+        }),
+        worktree({ id: 'b', displayName: 'B', workspaceStatus: 'doing', lastActivityAt: 50 }),
+        worktree({
+          id: 'c',
+          displayName: 'C',
+          workspaceStatus: 'doing',
+          workspaceGroupId: 'wg_a',
+          lastActivityAt: 40
+        })
+      ],
+      visibleWorktreeIds: new Set(['a', 'b', 'c']),
+      workspaceStatuses: statuses,
+      sortBy: 'recent'
+    })
 
-  it('skips pinned items', () => {
-    const items = [wt('a', 'g1', true), wt('b'), wt('c', 'g1')]
-    clusterByWorkspaceGroup(items)
-    expect(items.map((w) => w.id)).toEqual(['a', 'b', 'c'])
-  })
-
-  it('mutates input in place', () => {
-    const items = [wt('a', 'g1'), wt('b'), wt('c', 'g1')]
-    const ref = items
-    clusterByWorkspaceGroup(items)
-    expect(items).toBe(ref)
+    expect(grouped.get('doing')?.map((item) => item.id)).toEqual(['a', 'b', 'c'])
   })
 })

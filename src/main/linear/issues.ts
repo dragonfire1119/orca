@@ -23,6 +23,7 @@ type LinearIssueNode = {
   title: string
   description?: string | null
   url: string
+  estimate?: number | null
   priority: number
   updatedAt: string
   labelIds?: string[] | null
@@ -64,6 +65,7 @@ const LINEAR_ISSUE_NODE_FIELDS = `
   description
   url
   priority
+  estimate
   updatedAt
   labelIds
   state {
@@ -192,6 +194,7 @@ function mapRawIssueForWorkspace(
           avatarUrl: issue.assignee.avatarUrl ?? undefined
         }
       : undefined,
+    estimate: issue.estimate ?? null,
     priority: issue.priority,
     updatedAt: issue.updatedAt,
     workspaceId: entry.workspace.id,
@@ -363,7 +366,14 @@ export async function createIssue(
   title: string,
   description?: string,
   workspaceId?: string | null,
-  options?: { parentId?: string; projectId?: string | null }
+  options?: {
+    parentId?: string
+    projectId?: string | null
+    stateId?: string
+    priority?: number
+    assigneeId?: string | null
+    labelIds?: string[]
+  }
 ): Promise<
   | { ok: true; id: string; identifier: string; title: string; url: string }
   | { ok: false; error: string }
@@ -380,7 +390,11 @@ export async function createIssue(
       title,
       ...(description ? { description } : {}),
       ...(options?.parentId ? { parentId: options.parentId } : {}),
-      ...(options?.projectId ? { projectId: options.projectId } : {})
+      ...(options?.projectId ? { projectId: options.projectId } : {}),
+      ...(options?.stateId ? { stateId: options.stateId } : {}),
+      ...(options?.priority !== undefined ? { priority: options.priority } : {}),
+      ...(options?.assigneeId ? { assigneeId: options.assigneeId } : {}),
+      ...(options?.labelIds ? { labelIds: options.labelIds } : {})
     })
     if (!result.success) {
       return { ok: false, error: 'Linear create failed' }
@@ -433,8 +447,14 @@ export async function updateIssue(
     if (updates.title !== undefined) {
       payload.title = updates.title
     }
+    if (updates.description !== undefined) {
+      payload.description = updates.description
+    }
     if (updates.assigneeId !== undefined) {
       payload.assigneeId = updates.assigneeId
+    }
+    if (updates.estimate !== undefined) {
+      payload.estimate = updates.estimate
     }
     if (updates.priority !== undefined) {
       payload.priority = updates.priority

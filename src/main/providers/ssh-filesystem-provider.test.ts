@@ -3,6 +3,7 @@ SFTP binary writes, watch fan-out, and provider lifecycle tests together so
 transport parity regressions are visible in one suite. */
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { SshFilesystemProvider } from './ssh-filesystem-provider'
+import { JsonRpcErrorCode } from '../ssh/relay-protocol'
 
 type MockMultiplexer = {
   request: ReturnType<typeof vi.fn>
@@ -93,6 +94,24 @@ describe('SshFilesystemProvider', () => {
     })
   })
 
+  describe('getTempDir', () => {
+    it('reads and caches the remote temp directory from the relay', async () => {
+      mux.request.mockResolvedValue('/var/folders/remote')
+
+      await expect(provider.getTempDir()).resolves.toBe('/var/folders/remote')
+      await expect(provider.getTempDir()).resolves.toBe('/var/folders/remote')
+
+      expect(mux.request).toHaveBeenCalledTimes(1)
+      expect(mux.request).toHaveBeenCalledWith('fs.tempDir', {})
+    })
+
+    it('falls back to /tmp when connected to an older relay', async () => {
+      mux.request.mockRejectedValue(Object.assign(new Error('Method not found'), { code: -32601 }))
+
+      await expect(provider.getTempDir()).resolves.toBe('/tmp')
+    })
+  })
+
   describe('writeFileBase64', () => {
     it('writes decoded bytes through SFTP', async () => {
       const written: Buffer[] = []
@@ -162,6 +181,41 @@ describe('SshFilesystemProvider', () => {
     })
   })
 
+  describe('lstat', () => {
+    it('sends fs.lstat request', async () => {
+      const statResult = { size: 12, type: 'symlink', mtime: 1234567890 }
+      mux.request.mockResolvedValue(statResult)
+
+      const result = await provider.lstat('/home/user/link.txt')
+      expect(mux.request).toHaveBeenCalledWith('fs.lstat', { filePath: '/home/user/link.txt' })
+      expect(result).toEqual(statResult)
+    })
+
+    it('falls back to SFTP lstat when connected to an older relay', async () => {
+      mux.request.mockRejectedValue(Object.assign(new Error('Method not found'), { code: -32601 }))
+      const sftp = {
+        lstat: vi.fn((_path: string, callback: (err: Error | undefined, stats: unknown) => void) =>
+          callback(undefined, {
+            size: 12,
+            mtime: 1234567,
+            isDirectory: () => false,
+            isSymbolicLink: () => true
+          })
+        ),
+        end: vi.fn()
+      }
+      provider = new SshFilesystemProvider('conn-1', mux as never, async () => sftp as never)
+
+      await expect(provider.lstat('/home/user/link.txt')).resolves.toEqual({
+        size: 12,
+        type: 'symlink',
+        mtime: 1234567000
+      })
+      expect(sftp.lstat).toHaveBeenCalledWith('/home/user/link.txt', expect.any(Function))
+      expect(sftp.end).toHaveBeenCalled()
+    })
+  })
+
   it('scanWorkspaceSpace sends an abortable bulk scan request', async () => {
     const result = {
       sizeBytes: 1024,
@@ -201,6 +255,29 @@ describe('SshFilesystemProvider', () => {
   it('rename sends fs.rename request', async () => {
     await provider.rename('/home/old.txt', '/home/new.txt')
     expect(mux.request).toHaveBeenCalledWith('fs.rename', {
+      oldPath: '/home/old.txt',
+      newPath: '/home/new.txt'
+    })
+  })
+
+  it('renameNoClobber sends fs.renameNoClobber request', async () => {
+    await provider.renameNoClobber('/home/old.txt', '/home/new.txt')
+    expect(mux.request).toHaveBeenCalledWith('fs.renameNoClobber', {
+      oldPath: '/home/old.txt',
+      newPath: '/home/new.txt'
+    })
+  })
+
+  it('renameNoClobber fails closed when the relay lacks safe rename support', async () => {
+    mux.request.mockRejectedValueOnce(
+      Object.assign(new Error('Method not found'), { code: JsonRpcErrorCode.MethodNotFound })
+    )
+
+    await expect(provider.renameNoClobber('/home/old.txt', '/home/new.txt')).rejects.toThrow(
+      'Remote safe rename is unavailable'
+    )
+    expect(mux.request).toHaveBeenCalledTimes(1)
+    expect(mux.request).toHaveBeenCalledWith('fs.renameNoClobber', {
       oldPath: '/home/old.txt',
       newPath: '/home/new.txt'
     })

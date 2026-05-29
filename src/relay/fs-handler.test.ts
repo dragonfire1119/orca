@@ -124,6 +124,7 @@ describe('FsHandler', () => {
     const methods = Array.from(dispatcher._requestHandlers.keys())
     expect(methods).toContain('fs.readDir')
     expect(methods).toContain('fs.readFile')
+    expect(methods).toContain('fs.tempDir')
     expect(methods).toContain('fs.writeFile')
     expect(methods).toContain('fs.stat')
     expect(methods).toContain('fs.deletePath')
@@ -131,6 +132,7 @@ describe('FsHandler', () => {
     expect(methods).toContain('fs.createDir')
     expect(methods).toContain('fs.createDirNoClobber')
     expect(methods).toContain('fs.rename')
+    expect(methods).toContain('fs.renameNoClobber')
     expect(methods).toContain('fs.copy')
     expect(methods).toContain('fs.realpath')
     expect(methods).toContain('fs.search')
@@ -140,6 +142,10 @@ describe('FsHandler', () => {
 
     const notifMethods = Array.from(dispatcher._notificationHandlers.keys())
     expect(notifMethods).toContain('fs.unwatch')
+  })
+
+  it('tempDir returns the relay host temp directory', async () => {
+    await expect(dispatcher.callRequest('fs.tempDir')).resolves.toBe(tmpdir())
   })
 
   it('readDir returns sorted entries with directories first', async () => {
@@ -282,6 +288,19 @@ describe('FsHandler', () => {
     expect(result.type).toBe('directory')
   })
 
+  it('lstat returns symlink type without following links', async () => {
+    const targetFile = path.join(tmpDir, 'target.txt')
+    const linkPath = path.join(tmpDir, 'link.txt')
+    writeFileSync(targetFile, 'target')
+    symlinkSync(targetFile, linkPath)
+
+    const result = (await dispatcher.callRequest('fs.lstat', { filePath: linkPath })) as {
+      type: string
+    }
+
+    expect(result.type).toBe('symlink')
+  })
+
   it('workspaceSpaceScan returns bounded top-level size details', async () => {
     mkdirSync(path.join(tmpDir, 'node_modules'))
     writeFileSync(path.join(tmpDir, 'node_modules', 'pkg.js'), Buffer.alloc(512))
@@ -342,6 +361,43 @@ describe('FsHandler', () => {
     await expect(fs.access(oldPath)).rejects.toThrow()
     const content = await fs.readFile(newPath, 'utf-8')
     expect(content).toBe('content')
+  })
+
+  it('rename preserves raw fs.rename overwrite semantics', async () => {
+    const oldPath = path.join(tmpDir, 'old.txt')
+    const newPath = path.join(tmpDir, 'existing.txt')
+    writeFileSync(oldPath, 'new')
+    writeFileSync(newPath, 'keep')
+
+    await dispatcher.callRequest('fs.rename', { oldPath, newPath })
+
+    expect(await fs.readFile(newPath, 'utf-8')).toBe('new')
+    await expect(fs.access(oldPath)).rejects.toThrow()
+  })
+
+  it('renameNoClobber moves files when destination is available', async () => {
+    const oldPath = path.join(tmpDir, 'old.txt')
+    const newPath = path.join(tmpDir, 'new.txt')
+    writeFileSync(oldPath, 'content')
+
+    await dispatcher.callRequest('fs.renameNoClobber', { oldPath, newPath })
+
+    await expect(fs.access(oldPath)).rejects.toThrow()
+    expect(await fs.readFile(newPath, 'utf-8')).toBe('content')
+  })
+
+  it('renameNoClobber does not overwrite an existing destination', async () => {
+    const oldPath = path.join(tmpDir, 'old.txt')
+    const newPath = path.join(tmpDir, 'existing.txt')
+    writeFileSync(oldPath, 'new')
+    writeFileSync(newPath, 'keep')
+
+    await expect(
+      dispatcher.callRequest('fs.renameNoClobber', { oldPath, newPath })
+    ).rejects.toThrow()
+
+    expect(await fs.readFile(newPath, 'utf-8')).toBe('keep')
+    expect(await fs.readFile(oldPath, 'utf-8')).toBe('new')
   })
 
   it('copy duplicates files', async () => {

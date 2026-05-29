@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildTerminalQuickCommandInput,
+  flattenTerminalQuickCommand,
   getDefaultTerminalQuickCommands,
-  normalizeTerminalQuickCommands
+  normalizeTerminalQuickCommands,
+  terminalQuickCommandMatchesRepo
 } from './terminal-quick-commands'
 
 describe('terminal quick commands', () => {
@@ -48,27 +50,104 @@ describe('terminal quick commands', () => {
         id: 'status',
         label: 'Status',
         command: 'git status',
-        appendEnter: false
+        appendEnter: false,
+        scope: { type: 'global' }
       },
       {
         id: 'empty-command',
         label: 'Empty',
         command: '',
-        appendEnter: true
+        appendEnter: true,
+        scope: { type: 'global' }
       },
       {
         id: 'status-2',
         label: 'Duplicate',
         command: 'pwd',
-        appendEnter: true
+        appendEnter: true,
+        scope: { type: 'global' }
       },
       {
         id: 'quick-command-4',
         label: 'No ID',
         command: 'date',
-        appendEnter: true
+        appendEnter: true,
+        scope: { type: 'global' }
       }
     ])
+  })
+
+  it('normalizes repository scoped commands and falls back to global for invalid scopes', () => {
+    expect(
+      normalizeTerminalQuickCommands([
+        {
+          id: 'repo-dev',
+          label: 'Dev',
+          command: 'pnpm dev',
+          scope: { type: 'repo', repoId: ' repo-1 ' }
+        },
+        {
+          id: 'bad-repo',
+          label: 'Bad',
+          command: 'echo bad',
+          scope: { type: 'repo', repoId: '   ' }
+        }
+      ])
+    ).toEqual([
+      {
+        id: 'repo-dev',
+        label: 'Dev',
+        command: 'pnpm dev',
+        appendEnter: true,
+        scope: { type: 'repo', repoId: 'repo-1' }
+      },
+      {
+        id: 'bad-repo',
+        label: 'Bad',
+        command: 'echo bad',
+        appendEnter: true,
+        scope: { type: 'global' }
+      }
+    ])
+  })
+
+  it('matches global commands everywhere and repo commands only in their repo', () => {
+    expect(
+      terminalQuickCommandMatchesRepo(
+        {
+          id: 'global',
+          label: 'Global',
+          command: 'date',
+          appendEnter: true,
+          scope: { type: 'global' }
+        },
+        null
+      )
+    ).toBe(true)
+    expect(
+      terminalQuickCommandMatchesRepo(
+        {
+          id: 'repo',
+          label: 'Repo',
+          command: 'pnpm dev',
+          appendEnter: true,
+          scope: { type: 'repo', repoId: 'repo-1' }
+        },
+        'repo-1'
+      )
+    ).toBe(true)
+    expect(
+      terminalQuickCommandMatchesRepo(
+        {
+          id: 'repo',
+          label: 'Repo',
+          command: 'pnpm dev',
+          appendEnter: true,
+          scope: { type: 'repo', repoId: 'repo-1' }
+        },
+        'repo-2'
+      )
+    ).toBe(false)
   })
 
   it('formats terminal input without assuming shell semantics', () => {
@@ -88,5 +167,57 @@ describe('terminal quick commands', () => {
         appendEnter: false
       })
     ).toBe('git status')
+  })
+})
+
+describe('flattenTerminalQuickCommand', () => {
+  it('returns the same object when there are no line breaks', () => {
+    const command = {
+      id: 'test',
+      label: 'Test',
+      command: 'git status',
+      appendEnter: true
+    } as const
+    expect(flattenTerminalQuickCommand(command)).toBe(command)
+  })
+
+  it('replaces newlines with semicolons and spaces', () => {
+    const result = flattenTerminalQuickCommand({
+      id: 'test',
+      label: 'Test',
+      command: 'cd packages\nbun run build\ncd ..',
+      appendEnter: true
+    })
+    expect(result.command).toBe('cd packages; bun run build; cd ..')
+  })
+
+  it('collapses consecutive newlines into a single separator', () => {
+    const result = flattenTerminalQuickCommand({
+      id: 'test',
+      label: 'Test',
+      command: 'echo one\n\n\necho two',
+      appendEnter: true
+    })
+    expect(result.command).toBe('echo one; echo two')
+  })
+
+  it('handles Windows-style CRLF endings', () => {
+    const result = flattenTerminalQuickCommand({
+      id: 'test',
+      label: 'Test',
+      command: 'echo one\r\necho two',
+      appendEnter: true
+    })
+    expect(result.command).toBe('echo one; echo two')
+  })
+
+  it('drops empty edge lines without leaving dangling separators', () => {
+    const result = flattenTerminalQuickCommand({
+      id: 'test',
+      label: 'Test',
+      command: '\n  echo one  \n\n  echo two\n',
+      appendEnter: true
+    })
+    expect(result.command).toBe('echo one; echo two')
   })
 })

@@ -14,6 +14,24 @@ function createEditor(content: object): Editor {
   })
 }
 
+function firstEmptyParagraphPosition(editor: Editor): number {
+  let position: number | null = null
+  editor.state.doc.descendants((node, pos) => {
+    if (node.type.name === 'paragraph' && node.content.size === 0) {
+      position = pos + 1
+      return false
+    }
+
+    return true
+  })
+
+  if (position === null) {
+    throw new Error('Expected an empty paragraph in the test document')
+  }
+
+  return position
+}
+
 function keyEvent(
   key: string,
   overrides: Partial<KeyboardEvent> = {}
@@ -104,6 +122,52 @@ describe('rich markdown key handler', () => {
     }
   })
 
+  it('exits loaded trailing empty ordered-list items on Enter', () => {
+    const editor = createEditor({
+      type: 'doc',
+      content: [
+        {
+          type: 'orderedList',
+          attrs: { start: 1, type: null },
+          content: [
+            {
+              type: 'listItem',
+              content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Item 1' }] }]
+            },
+            {
+              type: 'listItem',
+              content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Item 2' }] }]
+            },
+            { type: 'listItem', content: [{ type: 'paragraph' }] }
+          ]
+        },
+        { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Next section' }] }
+      ]
+    })
+
+    try {
+      editor.commands.setTextSelection(firstEmptyParagraphPosition(editor))
+      const event = keyEvent('Enter')
+
+      expect(createRichMarkdownKeyHandler(createContext(editor, false))(null, event)).toBe(true)
+      expect(event.preventDefault).toHaveBeenCalled()
+      expect(editor.state.selection.$from.parent.type.name).toBe('paragraph')
+      expect(editor.state.selection.$from.depth).toBe(1)
+      expect(editor.state.doc.toJSON()).toMatchObject({
+        content: [
+          {
+            type: 'orderedList',
+            content: [{ type: 'listItem' }, { type: 'listItem' }]
+          },
+          { type: 'paragraph' },
+          { type: 'heading' }
+        ]
+      })
+    } finally {
+      editor.destroy()
+    }
+  })
+
   it('does not rewrite empty ordered-list input during IME composition', () => {
     const editor = createEditor(emptyTopLevelOrderedList())
 
@@ -141,6 +205,28 @@ describe('rich markdown key handler', () => {
       expect(event.preventDefault).not.toHaveBeenCalled()
       expect(editor.getText()).toBe('/')
       expect(ctx.slashMenuRef.current?.query).toBe('')
+    } finally {
+      editor.destroy()
+    }
+  })
+
+  it('dismisses the slash menu on Escape even when search has no matches', () => {
+    const editor = createEditor({
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: '/zzz' }] }]
+    })
+
+    try {
+      editor.commands.setTextSelection(5)
+      const ctx = createContext(editor, false)
+      ctx.slashMenuRef.current = { query: 'zzz', from: 1, to: 5, left: 0, top: 0 }
+      ctx.filteredSlashCommandsRef.current = []
+      ctx.setSlashMenu = vi.fn()
+      const event = keyEvent('Escape')
+
+      expect(createRichMarkdownKeyHandler(ctx)(null, event)).toBe(true)
+      expect(event.preventDefault).toHaveBeenCalled()
+      expect(ctx.setSlashMenu).toHaveBeenCalledWith(null)
     } finally {
       editor.destroy()
     }

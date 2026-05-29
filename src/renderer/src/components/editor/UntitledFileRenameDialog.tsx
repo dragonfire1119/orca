@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useRef, useState } from 'react'
 import { FolderOpen } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -10,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog'
+import { getRelativePathInsideRoot } from '@/lib/path'
 
 type UntitledFileRenameDialogProps = {
   open: boolean
@@ -35,19 +36,23 @@ export function UntitledFileRenameDialog({
   const [dir, setDir] = useState(worktreePath)
   const [error, setError] = useState<string | null>(null)
   const nameInputRef = useRef<HTMLInputElement>(null)
+  const seededOpenStateRef = useRef({ open: false, baseName, worktreePath })
 
   const displayError = externalError ?? error
 
-  useEffect(() => {
-    if (open) {
+  // Why: seed the drafts before the open dialog paints; focus is handled by
+  // Radix's open lifecycle below so this does not need a post-render Effect.
+  if (open) {
+    const seeded = seededOpenStateRef.current
+    if (!seeded.open || seeded.baseName !== baseName || seeded.worktreePath !== worktreePath) {
+      seededOpenStateRef.current = { open: true, baseName, worktreePath }
       setName(baseName)
       setDir(worktreePath)
       setError(null)
-      requestAnimationFrame(() => {
-        nameInputRef.current?.select()
-      })
     }
-  }, [open, baseName, worktreePath])
+  } else if (seededOpenStateRef.current.open) {
+    seededOpenStateRef.current = { open: false, baseName, worktreePath }
+  }
 
   const handleBrowse = useCallback(async () => {
     const picked = await window.api.shell.pickDirectory({ defaultPath: dir || worktreePath })
@@ -69,28 +74,36 @@ export function UntitledFileRenameDialog({
       return
     }
 
-    const trimmedDir = dir.trim().replace(/\/+$/, '')
+    const trimmedDir = dir.trim().replace(/[\\/]+$/, '')
     if (!trimmedDir) {
       setError('Folder path cannot be empty')
       return
     }
 
-    // Why: strict prefix check with trailing '/' prevents partial directory
-    // name matches (e.g. "/project-backup" matching "/project").
-    if (trimmedDir !== worktreePath && !trimmedDir.startsWith(`${worktreePath}/`)) {
+    const relDir = getRelativePathInsideRoot(trimmedDir, worktreePath)
+    if (relDir === null) {
       setError('Folder must be inside the current workspace')
       return
     }
 
     const fileName = `${trimmedName}.md`
-    const relDir = trimmedDir.slice(worktreePath.length).replace(/^\/+/, '')
     const relativePath = relDir ? `${relDir}/${fileName}` : fileName
     onConfirm(relativePath)
   }, [name, dir, worktreePath, onConfirm])
 
   return (
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose()}>
-      <DialogContent showCloseButton={false} className="max-w-[340px]">
+      <DialogContent
+        showCloseButton={false}
+        className="max-w-[340px]"
+        onOpenAutoFocus={(event) => {
+          event.preventDefault()
+          requestAnimationFrame(() => {
+            nameInputRef.current?.focus()
+            nameInputRef.current?.select()
+          })
+        }}
+      >
         <DialogHeader>
           <DialogTitle className="text-sm">Save as</DialogTitle>
           <DialogDescription className="text-xs">

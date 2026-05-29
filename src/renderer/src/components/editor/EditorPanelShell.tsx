@@ -8,6 +8,7 @@ import { UntitledFileRenameDialog } from './UntitledFileRenameDialog'
 import type { getEditorPanelRenderModel } from './editor-panel-render-model'
 import type { DiffContent, FileContent } from './editor-panel-content-types'
 import type { EditorToggleValue } from './EditorViewToggle'
+import { getUntitledFileRoot } from './untitled-file-rename-path'
 
 type EditorPanelRenderModel = ReturnType<typeof getEditorPanelRenderModel>
 
@@ -18,7 +19,6 @@ type EditorPanelShellProps = {
   model: EditorPanelRenderModel
   copiedPathVisible: boolean
   showMarkdownTableOfContents: boolean
-  markdownReviewToolsEnabled: boolean
   sideBySide: boolean
   openFiles: OpenFile[]
   fileContents: Record<string, FileContent>
@@ -29,14 +29,13 @@ type EditorPanelShellProps = {
   renameError: string | null
   disableRenameBrowse: boolean
   onCopyPath: () => void
-  onOpenDiffTargetFile: () => void
+  onOpenDiffTargetFile: (preferredMarkdownViewMode?: 'rich') => void
   onOpenPreviewToSide: () => void
   onOpenMarkdownPreview: () => void
   onOpenContainingFolder: () => void
   onToggleSideBySide: () => void
   onEditorToggleChange: (next: EditorToggleValue) => void
   onToggleMarkdownTableOfContents: () => void
-  onToggleMarkdownReviewTools: () => void
   onExportMarkdownToPdf: () => void
   onContentChange: (content: string) => void
   onContentChangeForFile: (file: OpenFile, content: string) => void
@@ -56,7 +55,6 @@ export function EditorPanelShell({
   model,
   copiedPathVisible,
   showMarkdownTableOfContents,
-  markdownReviewToolsEnabled,
   sideBySide,
   openFiles,
   fileContents,
@@ -74,7 +72,6 @@ export function EditorPanelShell({
   onToggleSideBySide,
   onEditorToggleChange,
   onToggleMarkdownTableOfContents,
-  onToggleMarkdownReviewTools,
   onExportMarkdownToPdf,
   onContentChange,
   onContentChangeForFile,
@@ -107,7 +104,6 @@ export function EditorPanelShell({
           canShowMarkdownTableOfContents={model.canShowMarkdownTableOfContents}
           isMarkdownTableOfContentsDisabled={model.isMarkdownTableOfContentsDisabled}
           showMarkdownTableOfContents={showMarkdownTableOfContents}
-          markdownReviewToolsEnabled={markdownReviewToolsEnabled}
           sideBySide={sideBySide}
           openFileState={model.openFileState}
           onCopyPath={onCopyPath}
@@ -118,7 +114,6 @@ export function EditorPanelShell({
           onToggleSideBySide={onToggleSideBySide}
           onEditorToggleChange={onEditorToggleChange}
           onToggleMarkdownTableOfContents={onToggleMarkdownTableOfContents}
-          onToggleMarkdownReviewTools={onToggleMarkdownReviewTools}
           onExportMarkdownToPdf={onExportMarkdownToPdf}
         />
       )}
@@ -147,7 +142,6 @@ export function EditorPanelShell({
           handleSaveForFile={onSaveForFile}
           reloadFileContent={onReloadFileContent}
           showMarkdownTableOfContents={showMarkdownTableOfContents}
-          markdownReviewToolsEnabled={markdownReviewToolsEnabled}
           onCloseMarkdownTableOfContents={onCloseMarkdownTableOfContents}
         />
       </Suspense>
@@ -156,8 +150,13 @@ export function EditorPanelShell({
         currentName={renameDialogFile?.relativePath ?? ''}
         worktreePath={
           renameDialogFile
-            ? (findWorktreeById(useAppStore.getState().worktreesByRepo, renameDialogFile.worktreeId)
-                ?.path ?? '')
+            ? getUntitledFileRoot(
+                renameDialogFile,
+                findWorktreeById(
+                  useAppStore.getState().worktreesByRepo,
+                  renameDialogFile.worktreeId
+                )?.path
+              )
             : ''
         }
         disableBrowse={disableRenameBrowse}

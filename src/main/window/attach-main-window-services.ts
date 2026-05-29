@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto'
 
 import { app, ipcMain, session } from 'electron'
-import type { BrowserWindow } from 'electron'
+import type { BrowserWindow, Session } from 'electron'
 import type { Store } from '../persistence'
 import type { CreateWorktreeResult, WorktreeStartupLaunch } from '../../shared/types'
 import { ORCA_BROWSER_PARTITION } from '../../shared/constants'
@@ -32,6 +32,7 @@ import type {
   RuntimeMarkdownReadTabResult,
   RuntimeMarkdownSaveTabResult
 } from '../../shared/mobile-markdown-document'
+import type { RuntimeMobileSessionTabMove } from '../../shared/runtime-types'
 import { requestMobileMarkdownFromRenderer } from './mobile-markdown-request-relay'
 
 export function attachMainWindowServices(
@@ -39,8 +40,12 @@ export function attachMainWindowServices(
   store: Store,
   runtime: OrcaRuntimeService,
   getSelectedCodexHomePath?: () => string | null,
-  prepareClaudeAuth?: () => Promise<ClaudeRuntimeAuthPreparation>
+  prepareClaudeAuth?: () => Promise<ClaudeRuntimeAuthPreparation>,
+  options?: {
+    onBeforeRendererReload?: (args: { webContentsId: number; ignoreCache: boolean }) => void
+  }
 ): void {
+  registerAppReloadHandler(mainWindow, options?.onBeforeRendererReload)
   registerRepoHandlers(mainWindow, store)
   registerWorktreeHandlers(mainWindow, store, runtime)
   registerWorkspaceCleanupHandlers(store, { runtime, getLocalPtyProvider })
@@ -191,12 +196,7 @@ export function attachMainWindowServices(
     // signature while still denying the request.
     callback({ video: undefined, audio: undefined })
   })
-  browserSession.on('will-download', (_event, item, webContents) => {
-    // Why: browser-tab downloads need explicit product UX before arbitrary sites
-    // can write files through Orca. Pause the item and route it through
-    // BrowserManager so the user must explicitly accept the save path first.
-    browserManager.handleGuestWillDownload({ guestWebContentsId: webContents.id, item })
-  })
+  registerBrowserDownloadHandler(browserSession)
 
   mainWindow.on('closed', () => {
     // Why: parked browser webviews can outlive the visible tab body until the
@@ -204,6 +204,45 @@ export function attachMainWindowServices(
     // close prevents stale tab→webContents ids from leaking across app relaunch
     // or hot-reload cycles.
     browserManager.unregisterAll()
+  })
+}
+
+function handleBrowserWillDownload(
+  _event: Electron.Event,
+  item: Electron.DownloadItem,
+  webContents: Electron.WebContents
+): void {
+  // Why: browser-tab downloads need explicit product UX before arbitrary sites
+  // can write files through Orca. Pause the item and route it through
+  // BrowserManager so the user must explicitly accept the save path first.
+  browserManager.handleGuestWillDownload({ guestWebContentsId: webContents.id, item })
+}
+
+function registerBrowserDownloadHandler(browserSession: Session): void {
+  // Why: browser sessions are process-persistent while main windows can be
+  // recreated; replace the named handler so re-attach does not stack listeners.
+  browserSession.removeListener('will-download', handleBrowserWillDownload)
+  browserSession.on('will-download', handleBrowserWillDownload)
+}
+
+function registerAppReloadHandler(
+  mainWindow: BrowserWindow,
+  onBeforeRendererReload?: (args: { webContentsId: number; ignoreCache: boolean }) => void
+): void {
+  // Why: the process-global IPC handler can outlive the BrowserWindow, so keep
+  // the registered WebContents and guard both lifetimes before using it.
+  const mainWebContents = mainWindow.webContents
+  ipcMain.removeHandler('app:reload')
+  ipcMain.handle('app:reload', (event) => {
+    if (
+      mainWindow.isDestroyed() ||
+      mainWebContents.isDestroyed() ||
+      event.sender !== mainWebContents
+    ) {
+      return
+    }
+    onBeforeRendererReload?.({ webContentsId: mainWebContents.id, ignoreCache: false })
+    mainWebContents.reload()
   })
 }
 
@@ -270,7 +309,9 @@ function registerRuntimeWindowLifecycle(
           // with the paneKey baked into the PTY env at spawn time, so hook
           // events route to the right slot.
           ...(opts.tabId !== undefined ? { tabId: opts.tabId } : {}),
-          ...(opts.leafId !== undefined ? { leafId: opts.leafId } : {})
+          ...(opts.leafId !== undefined ? { leafId: opts.leafId } : {}),
+          ...(opts.splitFromLeafId !== undefined ? { splitFromLeafId: opts.splitFromLeafId } : {}),
+          ...(opts.splitDirection !== undefined ? { splitDirection: opts.splitDirection } : {})
         })
       }),
     splitTerminal: (tabId, paneRuntimeId, opts) => {
@@ -286,6 +327,8 @@ function registerRuntimeWindowLifecycle(
       send('ui:focusTerminal', { tabId, worktreeId, leafId }),
     focusEditorTab: (tabId, worktreeId) => send('ui:focusEditorTab', { tabId, worktreeId }),
     closeSessionTab: (tabId, worktreeId) => send('ui:closeSessionTab', { tabId, worktreeId }),
+    moveSessionTab: (worktreeId: string, move: RuntimeMobileSessionTabMove) =>
+      send('ui:moveSessionTab', { worktreeId, ...move }),
     openFile: (worktreeId, filePath, relativePath) =>
       send('ui:openFileFromMobile', { worktreeId, filePath, relativePath }),
     openDiff: (worktreeId, filePath, relativePath, staged) =>
@@ -309,7 +352,9 @@ function registerRuntimeWindowLifecycle(
     terminalFitOverrideChanged: (ptyId, mode, cols, rows) =>
       send('runtime:terminalFitOverrideChanged', { ptyId, mode, cols, rows }),
     terminalDriverChanged: (ptyId, driver) =>
-      send('runtime:terminalDriverChanged', { ptyId, driver })
+      send('runtime:terminalDriverChanged', { ptyId, driver }),
+    browserDriverChanged: (browserPageId, driver) =>
+      send('runtime:browserDriverChanged', { browserPageId, driver })
   })
   // Why: the runtime must fail closed while the renderer graph is being torn
   // down or rebuilt, otherwise future CLI calls could act on stale terminal

@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ManagedPane, PaneManager } from '@/lib/pane-manager/pane-manager'
 import type { PtyTransport } from './pty-transport'
+import { getConnectionId } from '@/lib/connection-context'
 import { resolveSplitCwd, type PaneCwdMap } from './resolve-split-cwd'
 import type { TerminalQuickCommand } from '../../../../shared/types'
 import { sendTerminalQuickCommandToPane } from './terminal-quick-command-dispatch'
+import { splitWebRuntimeTerminal } from '@/runtime/web-runtime-session'
+import { pasteTerminalText } from './terminal-bracketed-paste'
+import { pasteTerminalClipboard } from './terminal-clipboard-paste'
 
 const CLOSE_ALL_CONTEXT_MENUS_EVENT = 'orca-close-all-context-menus'
 
@@ -11,10 +15,12 @@ type UseTerminalPaneContextMenuDeps = {
   managerRef: React.RefObject<PaneManager | null>
   paneTransportsRef: React.RefObject<Map<number, PtyTransport>>
   paneCwdRef: React.RefObject<PaneCwdMap>
+  worktreeId: string
   fallbackCwd: string
   toggleExpandPane: (paneId: number) => void
   onRequestClosePane: (paneId: number) => void
   onSetTitle: (paneId: number) => void
+  onPasteError: (message: string) => void
   rightClickToPaste: boolean
 }
 
@@ -42,10 +48,12 @@ export function useTerminalPaneContextMenu({
   managerRef,
   paneTransportsRef,
   paneCwdRef,
+  worktreeId,
   fallbackCwd,
   toggleExpandPane,
   onRequestClosePane,
   onSetTitle,
+  onPasteError,
   rightClickToPaste
 }: UseTerminalPaneContextMenuDeps): TerminalMenuState {
   const contextPaneIdRef = useRef<number | null>(null)
@@ -100,19 +108,17 @@ export function useTerminalPaneContextMenu({
     if (!pane) {
       return
     }
-    const text = await window.api.ui.readClipboardText()
-    if (text) {
-      pane.terminal.paste(text)
-      pane.terminal.focus()
-      return
-    }
-    // Why: clipboard has no text — check for an image (e.g. screenshot).
-    // Saves the image to a temp file and pastes the path so CLI tools like
-    // Claude Code can access it, consistent with the keyboard paste path.
-    const filePath = await window.api.ui.saveClipboardImageAsTempFile()
-    if (filePath) {
-      pane.terminal.paste(filePath)
-    }
+    const connectionId = getConnectionId(worktreeId) ?? null
+    await pasteTerminalClipboard({
+      readClipboardText: window.api.ui.readClipboardText,
+      saveClipboardImageAsTempFile: window.api.ui.saveClipboardImageAsTempFile,
+      connectionId,
+      pasteText: (text, options) => pasteTerminalText(pane.terminal, text, options),
+      onImagePasteError: (error) => {
+        const detail = error instanceof Error ? error.message : String(error)
+        onPasteError(`Image paste failed: ${detail}`)
+      }
+    })
     // Why: Radix returns focus to the menu trigger (the pane container) on
     // close, but xterm.js only accepts input when its own helper textarea is
     // focused. Without this, the user has to click the pane again before
@@ -128,12 +134,15 @@ export function useTerminalPaneContextMenu({
     if (!pane) {
       return
     }
+    const ptyId = paneTransportsRef.current.get(pane.id)?.getPtyId() ?? null
+    if (splitWebRuntimeTerminal(ptyId, direction)) {
+      return
+    }
     const cached = paneCwdRef.current.get(pane.id)
     if (cached?.confirmed && cached.cwd) {
       managerRef.current?.splitPane(pane.id, direction, { cwd: cached.cwd })
       return
     }
-    const ptyId = paneTransportsRef.current.get(pane.id)?.getPtyId() ?? null
     const paneId = pane.id
     void (async () => {
       const cwd = await resolveSplitCwd({

@@ -6,16 +6,34 @@ describe('getDefaultSettings', () => {
     expect(getDefaultSettings('/tmp').showGitIgnoredFiles).toBe(true)
   })
 
+  it('uses list view for Source Control changes by default', () => {
+    expect(getDefaultSettings('/tmp').sourceControlViewMode).toBe('list')
+  })
+
   it('enables separate light terminal theme by default', () => {
     expect(getDefaultSettings('/tmp').terminalUseSeparateLightTheme).toBe(true)
   })
 
-  it('enables AI commit messages by default without pinning a separate agent', () => {
+  it('enables Source Control AI by default without pinning a separate agent', () => {
     expect(getDefaultSettings('/tmp').commitMessageAi).toMatchObject({
       enabled: true,
       agentId: null,
       selectedModelByAgent: {}
     })
+    expect(getDefaultSettings('/tmp').sourceControlAi).toMatchObject({
+      enabled: true,
+      agentId: null,
+      selectedModelByAgent: {},
+      instructionsByOperation: {
+        commitMessage: '',
+        pullRequest: '',
+        branchName: ''
+      }
+    })
+  })
+
+  it('keeps compact worktree cards experimental and disabled by default', () => {
+    expect(getDefaultSettings('/tmp').experimentalCompactWorktreeCards).toBe(false)
   })
 })
 
@@ -24,8 +42,11 @@ describe('getDefaultPrimarySelectionMiddleClickPaste', () => {
     expect(getDefaultPrimarySelectionMiddleClickPaste('linux')).toBe(true)
   })
 
-  it('leaves primary selection paste opt-in on macOS and Windows', () => {
-    expect(getDefaultPrimarySelectionMiddleClickPaste('darwin')).toBe(false)
+  it('enables primary selection paste on macOS by default', () => {
+    expect(getDefaultPrimarySelectionMiddleClickPaste('darwin')).toBe(true)
+  })
+
+  it('leaves primary selection paste opt-in on Windows', () => {
     expect(getDefaultPrimarySelectionMiddleClickPaste('win32')).toBe(false)
   })
 })

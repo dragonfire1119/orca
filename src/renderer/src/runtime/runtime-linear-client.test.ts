@@ -193,7 +193,7 @@ describe('runtime linear client', () => {
     await linearUpdateIssue(
       { activeRuntimeEnvironmentId: 'env-1' },
       'issue-1',
-      { priority: 2 },
+      { estimate: 5, priority: 2 },
       'workspace-1'
     )
     await linearCreateSubIssue(
@@ -219,7 +219,11 @@ describe('runtime linear client', () => {
     expect(runtimeEnvironmentCall).toHaveBeenNthCalledWith(2, {
       selector: 'env-1',
       method: 'linear.updateIssue',
-      params: { id: 'issue-1', updates: { priority: 2 }, workspaceId: 'workspace-1' },
+      params: {
+        id: 'issue-1',
+        updates: { estimate: 5, priority: 2 },
+        workspaceId: 'workspace-1'
+      },
       timeoutMs: 30_000
     })
     expect(runtimeEnvironmentCall).toHaveBeenNthCalledWith(3, {

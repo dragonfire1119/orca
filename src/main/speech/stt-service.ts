@@ -1,3 +1,5 @@
+/* eslint-disable max-lines -- Why: speech worker ownership, warm reuse, and
+timeout teardown must stay co-located so dictation lifecycle state cannot drift. */
 import { Worker } from 'worker_threads'
 import { join } from 'path'
 import { app } from 'electron'
@@ -5,6 +7,7 @@ import { getCatalogModel } from './model-catalog'
 import type { ModelManager } from './model-manager'
 
 const STOP_DICTATION_TIMEOUT_MS = 60_000
+export const IDLE_WORKER_TEARDOWN_MS = 60 * 60 * 1000
 
 export type SttEvent =
   | { type: 'ready' }
@@ -53,7 +56,7 @@ export class SttService {
     try {
       await this._startDictation(modelId, sink, hotwordsFilePath, owner)
       if (this.canceledOwners.delete(owner)) {
-        await this.stopDictation(owner)
+        await this.stopDictation(owner, { cancelStarting: false })
         throw new Error('dictation_canceled')
       }
       this.activeOwner = owner
@@ -81,7 +84,7 @@ export class SttService {
     }
 
     if (this.worker) {
-      await this.stopDictation(owner)
+      await this.stopDictation(owner, { cancelStarting: false })
       await this.teardownIdleWorker()
     }
 
@@ -204,17 +207,23 @@ export class SttService {
 
   feedAudio(samples: Float32Array, sampleRate: number, owner = 'desktop'): void {
     const currentOwner = this.activeOwner ?? this.startingOwner
-    if (currentOwner && currentOwner !== owner) {
+    if (!currentOwner) {
+      return
+    }
+    if (currentOwner !== owner) {
       throw new Error('dictation_owner_mismatch')
     }
     this.worker?.postMessage({ type: 'feed', samples, sampleRate }, [samples.buffer as ArrayBuffer])
   }
 
-  async stopDictation(owner = 'desktop'): Promise<void> {
+  async stopDictation(
+    owner = 'desktop',
+    options: { cancelStarting?: boolean } = { cancelStarting: true }
+  ): Promise<void> {
+    if (options.cancelStarting !== false && this.startingOwner === owner) {
+      this.canceledOwners.add(owner)
+    }
     if (!this.worker) {
-      if (this.startingOwner === owner) {
-        this.canceledOwners.add(owner)
-      }
       return
     }
     const currentOwner = this.activeOwner ?? this.startingOwner
@@ -225,26 +234,62 @@ export class SttService {
     const worker = this.worker
     worker.postMessage({ type: 'stop' })
 
+    let forcedTeardown = false
     await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => {
-        worker.terminate()
+      let settled = false
+      let timeout: ReturnType<typeof setTimeout> | null = null
+
+      const cleanup = (): void => {
+        if (timeout) {
+          clearTimeout(timeout)
+          timeout = null
+        }
+        worker.off('message', onStopped)
+      }
+
+      const finish = (): void => {
+        if (settled) {
+          return
+        }
+        settled = true
+        cleanup()
         resolve()
-      }, STOP_DICTATION_TIMEOUT_MS)
+      }
 
       const onStopped = (msg: { type: string; text?: string; error?: string }) => {
         if (msg.type === 'stopped') {
-          clearTimeout(timeout)
-          worker.off('message', onStopped)
-          resolve()
+          finish()
         }
       }
+
+      timeout = setTimeout(() => {
+        if (settled) {
+          return
+        }
+        settled = true
+        forcedTeardown = true
+        cleanup()
+        // Why: a worker that cannot finish dictation is no longer reusable; do
+        // not keep it in the warm-worker slot or retain its message listeners.
+        worker.removeAllListeners()
+        void worker.terminate().finally(resolve)
+      }, STOP_DICTATION_TIMEOUT_MS)
+
       worker.on('message', onStopped)
     })
 
     if (this.worker === worker) {
-      this.activeOwner = null
-      this.eventSink = null
-      this.scheduleIdleTeardown()
+      if (forcedTeardown) {
+        this.worker = null
+        this.activeModelId = null
+        this.activeHotwordsFilePath = undefined
+        this.activeOwner = null
+        this.eventSink = null
+      } else {
+        this.activeOwner = null
+        this.eventSink = null
+        this.scheduleIdleTeardown()
+      }
     }
   }
 
@@ -275,12 +320,9 @@ export class SttService {
     // Why: keep the native recognizer warm for repeated dictations, but release
     // the ONNX model after a quiet period so long-running Orca sessions don't
     // pin speech memory forever.
-    this.idleTeardownTimer = setTimeout(
-      () => {
-        void this.teardownIdleWorker()
-      },
-      5 * 60 * 1000
-    )
+    this.idleTeardownTimer = setTimeout(() => {
+      void this.teardownIdleWorker()
+    }, IDLE_WORKER_TEARDOWN_MS)
     this.idleTeardownTimer.unref?.()
   }
 

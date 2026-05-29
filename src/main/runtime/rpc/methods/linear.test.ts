@@ -74,6 +74,7 @@ describe('linear RPC methods', () => {
         updates: {
           stateId: 'state-1',
           assigneeId: null,
+          estimate: 5,
           priority: 2,
           labelIds: ['label-1'],
           projectId: 'project-1'
@@ -109,7 +110,13 @@ describe('linear RPC methods', () => {
       'Details',
       'workspace-1',
       undefined,
-      undefined
+      undefined,
+      {
+        assigneeId: undefined,
+        labelIds: undefined,
+        priority: undefined,
+        stateId: undefined
+      }
     )
     expect(runtime.linearCreateIssue).toHaveBeenCalledWith(
       'team-1',
@@ -117,13 +124,20 @@ describe('linear RPC methods', () => {
       undefined,
       'workspace-1',
       'issue-3',
-      'project-1'
+      'project-1',
+      {
+        assigneeId: undefined,
+        labelIds: undefined,
+        priority: undefined,
+        stateId: undefined
+      }
     )
     expect(runtime.linearUpdateIssue).toHaveBeenCalledWith(
       'issue-3',
       {
         stateId: 'state-1',
         assigneeId: null,
+        estimate: 5,
         priority: 2,
         labelIds: ['label-1'],
         projectId: 'project-1'

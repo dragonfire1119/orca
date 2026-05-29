@@ -16,14 +16,17 @@ import { createLowlight, common } from 'lowlight'
 import { loadLocalImageSrc, onImageCacheInvalidated } from './useLocalImageSrc'
 import type { RuntimeFileOperationArgs } from '@/runtime/runtime-file-client'
 import { RawMarkdownHtmlBlock, RawMarkdownHtmlInline } from './raw-markdown-html'
+import {
+  createOrcaDetailsExtensions,
+  getRichMarkdownPlaceholder
+} from './rich-markdown-details-extension'
 import { MarkdownDocLink } from './rich-markdown-doc-link'
 import { RichMarkdownCodeBlock } from './RichMarkdownCodeBlock'
 import { safeReactNodeViewRenderer } from './safe-react-node-view-renderer'
 import { DragSelectionGuard } from './drag-selection-guard'
+import { createRichMarkdownAnnotationHighlightExtension } from './rich-markdown-annotation-highlight'
 
 const lowlight = createLowlight(common)
-
-const RICH_MARKDOWN_PLACEHOLDER = 'Write markdown… Type / for blocks.'
 
 export function createRichMarkdownExtensions({
   includePlaceholder = false
@@ -140,6 +143,7 @@ export function createRichMarkdownExtensions({
     TaskItem.configure({
       nested: true
     }),
+    ...createOrcaDetailsExtensions(),
     Table.configure({
       resizable: false
     }),
@@ -165,13 +169,15 @@ export function createRichMarkdownExtensions({
       markedOptions: {
         gfm: true
       }
-    })
+    }),
+    createRichMarkdownAnnotationHighlightExtension()
   ]
 
   if (includePlaceholder) {
     extensions.push(
       Placeholder.configure({
-        placeholder: RICH_MARKDOWN_PLACEHOLDER
+        includeChildren: true,
+        placeholder: getRichMarkdownPlaceholder
       })
     )
   }

@@ -1,6 +1,11 @@
 import React from 'react'
 import { Plus } from 'lucide-react'
-import type { Repo, WorkspaceStatusDefinition, Worktree } from '../../../../shared/types'
+import type {
+  Repo,
+  WorkspaceGroupColor,
+  WorkspaceStatusDefinition,
+  Worktree
+} from '../../../../shared/types'
 import {
   WORKSPACE_BOARD_COLUMN_WIDTH_MAX,
   WORKSPACE_BOARD_COLUMN_WIDTH_MIN
@@ -14,6 +19,7 @@ import { getWorkspaceStatusVisualMeta } from './workspace-status'
 type WorkspaceKanbanStatusLaneProps = {
   status: WorkspaceStatusDefinition
   items: readonly Worktree[]
+  workspaceGroupColors: ReadonlyMap<string, WorkspaceGroupColor>
   repoMap: Map<string, Repo>
   activeWorktreeId: string | null
   compact: boolean
@@ -41,6 +47,7 @@ type WorkspaceKanbanStatusLaneProps = {
 export default function WorkspaceKanbanStatusLane({
   status,
   items,
+  workspaceGroupColors,
   repoMap,
   activeWorktreeId,
   compact,
@@ -64,7 +71,7 @@ export default function WorkspaceKanbanStatusLane({
   const meta = getWorkspaceStatusVisualMeta(status)
   const createTooltip = canCreateWorktree
     ? `New workspace in ${status.label}`
-    : 'Add a Git project to create worktrees'
+    : 'Add a project to create workspaces'
   const createButton = (
     <Button
       type="button"
@@ -138,7 +145,10 @@ export default function WorkspaceKanbanStatusLane({
         </Tooltip>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1.5 py-2 scrollbar-sleek">
+      <div
+        data-workspace-board-lane-scroll=""
+        className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1.5 py-2 scrollbar-sleek"
+      >
         {items.length > 0 ? (
           <div className="space-y-2">
             {items.map((worktree) => {
@@ -155,6 +165,11 @@ export default function WorkspaceKanbanStatusLane({
                     isSelected && selectedWorktrees.length > 0 ? selectedWorktrees : undefined
                   }
                   compact={compact}
+                  groupColor={
+                    worktree.workspaceGroupId
+                      ? workspaceGroupColors.get(worktree.workspaceGroupId)
+                      : undefined
+                  }
                   onActivate={onActivate}
                   onSelectionGesture={onSelectionGesture}
                   onContextMenuSelect={onContextMenuSelect}

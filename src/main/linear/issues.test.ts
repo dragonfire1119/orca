@@ -35,6 +35,7 @@ function rawIssue(id: string, updatedAt = '2026-01-01T00:00:00.000Z') {
     title: id,
     description: 'Description',
     url: `https://linear.app/${id}`,
+    estimate: 3,
     priority: 2,
     updatedAt,
     labelIds: ['label-1'],
@@ -63,12 +64,14 @@ describe('Linear issue queries', () => {
         labels: ['Bug'],
         labelIds: ['label-1'],
         workspaceId: 'workspace-1',
-        team: { id: 'team-1' }
+        team: { id: 'team-1' },
+        estimate: 3
       }
     ])
 
     expect(rawRequest).toHaveBeenCalledTimes(1)
     expect(rawRequest.mock.calls[0][0]).toContain('query OrcaLinearIssues')
+    expect(rawRequest.mock.calls[0][0]).toContain('estimate')
   })
 
   it('keeps single-workspace search results in Linear relevance order', async () => {
@@ -118,5 +121,24 @@ describe('Linear issue queries', () => {
         labelIds: ['label-1', 'label-2']
       }
     ])
+  })
+
+  it('sends estimate updates through to Linear', async () => {
+    const updateIssue = vi.fn().mockResolvedValue({ success: true })
+    getClients.mockReturnValue([
+      {
+        ...makeEntry(),
+        client: {
+          updateIssue
+        }
+      }
+    ])
+    const { updateIssue: updateLinearIssue } = await import('./issues')
+
+    await expect(updateLinearIssue('issue-1', { estimate: 5 }, 'workspace-1')).resolves.toEqual({
+      ok: true
+    })
+
+    expect(updateIssue).toHaveBeenCalledWith('issue-1', { estimate: 5 })
   })
 })

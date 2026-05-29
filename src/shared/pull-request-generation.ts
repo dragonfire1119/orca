@@ -3,6 +3,7 @@ import { truncateDiffForPrompt } from './commit-message-prompt'
 export type PullRequestDraftContext = {
   branch: string | null
   base: string
+  branchChangedByPreparation: boolean
   currentTitle: string
   currentBody: string
   currentDraft: boolean
@@ -63,13 +64,21 @@ export function buildPullRequestFieldsPrompt(
 
   const trimmedInstructions = customInstructions.trim()
   if (!trimmedInstructions) {
-    return base
+    return [
+      base,
+      '',
+      'Final output requirement:',
+      'Return compact JSON only with keys base, title, body, and draft. No prose or code fences.'
+    ].join('\n')
   }
   return [
     base,
     '',
     'Additional instructions from user:',
-    limitSection(trimmedInstructions, 4_000)
+    limitSection(trimmedInstructions, 4_000),
+    '',
+    'Final output requirement:',
+    'Return compact JSON only with keys base, title, body, and draft. No prose or code fences.'
   ].join('\n')
 }
 

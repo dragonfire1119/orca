@@ -20,11 +20,15 @@ export function useWorkspaceGroupDrop({
       return
     }
     e.preventDefault()
+    e.stopPropagation()
     e.dataTransfer.dropEffect = 'move'
     setIsOver(true)
   }, [])
 
-  const onDragLeave = useCallback(() => setIsOver(false), [])
+  const onDragLeave = useCallback((e: React.DragEvent) => {
+    e.stopPropagation()
+    setIsOver(false)
+  }, [])
 
   const onDrop = useCallback(
     (e: React.DragEvent) => {
@@ -32,6 +36,7 @@ export function useWorkspaceGroupDrop({
         return
       }
       e.preventDefault()
+      e.stopPropagation()
       setIsOver(false)
       const ids = readWorkspaceDragDataIds(e.dataTransfer)
       if (ids.length === 0) {

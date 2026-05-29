@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- Why: the board drawer owns shared board state, drag/drop, and settings callbacks that need one coordinated surface. */
-import React, { useCallback, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '@/store'
 import { useAllWorktrees, useRepoMap } from '@/store/selectors'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
@@ -25,9 +25,15 @@ import {
 } from './use-workspace-kanban-outside-dismiss'
 import { useVisibleWorkspaceKanbanWorktreeIds } from './use-visible-workspace-kanban-worktree-ids'
 import { groupWorkspaceKanbanWorktrees } from './workspace-kanban-worktree-groups'
-import { expandWorktreeIdsToGroupMembers } from './workspace-group-actions'
-import type { WorkspaceStatus } from '../../../../shared/types'
+import {
+  buildManualOrderUpdatesForGroupDrop,
+  shouldWriteManualOrderForGroupDrop,
+  type WorktreeDragGroup
+} from './worktree-manual-order'
+import type { WorkspaceStatus, WorktreeMeta } from '../../../../shared/types'
 import { makeWorkspaceStatusId } from '../../../../shared/workspace-statuses'
+import { expandWorktreeIdsToGroupMembers } from './workspace-group-actions'
+import { buildWorkspaceGroupStatusUpdates } from './workspace-group-status-sync'
 
 type WorkspaceKanbanDrawerProps = {
   open: boolean
@@ -49,12 +55,13 @@ export default function WorkspaceKanbanDrawer({
   const updateWorktreesMeta = useAppStore((s) => s.updateWorktreesMeta)
   const workspaceStatuses = useAppStore((s) => s.workspaceStatuses)
   const setWorkspaceStatuses = useAppStore((s) => s.setWorkspaceStatuses)
-  const workspaceBoardOpacity = useAppStore((s) => s.workspaceBoardOpacity)
-  const setWorkspaceBoardOpacity = useAppStore((s) => s.setWorkspaceBoardOpacity)
+  const workspaceGroups = useAppStore((s) => s.workspaceGroups)
   const workspaceBoardCompact = useAppStore((s) => s.workspaceBoardCompact)
   const setWorkspaceBoardCompact = useAppStore((s) => s.setWorkspaceBoardCompact)
   const workspaceBoardColumnWidth = useAppStore((s) => s.workspaceBoardColumnWidth)
   const setWorkspaceBoardColumnWidth = useAppStore((s) => s.setWorkspaceBoardColumnWidth)
+  const sortBy = useAppStore((s) => s.sortBy)
+  const setSortBy = useAppStore((s) => s.setSortBy)
   const sidebarOpen = useAppStore((s) => s.sidebarOpen)
   const sidebarWidth = useAppStore((s) => s.sidebarWidth)
   const boardRef = useRef<HTMLDivElement>(null)
@@ -65,22 +72,34 @@ export default function WorkspaceKanbanDrawer({
   const { canCreateWorktree, createWorktreeForStatus } = useWorkspaceKanbanCreateWorktree()
   const visibleWorktreeIdSet = useVisibleWorkspaceKanbanWorktreeIds({
     allWorktrees,
-    activeWorktreeId,
     repoMap
   })
   const worktreesByStatus = useMemo(() => {
     return groupWorkspaceKanbanWorktrees({
       worktrees: allWorktrees,
       visibleWorktreeIds: visibleWorktreeIdSet,
-      workspaceStatuses
+      workspaceStatuses,
+      sortBy
     })
-  }, [allWorktrees, visibleWorktreeIdSet, workspaceStatuses])
+  }, [allWorktrees, sortBy, visibleWorktreeIdSet, workspaceStatuses])
   const worktreeById = useMemo(
     () => new Map(allWorktrees.map((worktree) => [worktree.id, worktree])),
     [allWorktrees]
   )
+  const workspaceGroupColors = useMemo(
+    () => new Map(workspaceGroups.map((group) => [group.id, group.color])),
+    [workspaceGroups]
+  )
   const boardWorktrees = useMemo(
     () => workspaceStatuses.flatMap((status) => worktreesByStatus.get(status.id) ?? []),
+    [worktreesByStatus, workspaceStatuses]
+  )
+  const boardDragGroups = useMemo<WorktreeDragGroup[]>(
+    () =>
+      workspaceStatuses.map((status) => ({
+        key: status.id,
+        worktreeIds: (worktreesByStatus.get(status.id) ?? []).map((worktree) => worktree.id)
+      })),
     [worktreesByStatus, workspaceStatuses]
   )
   const {
@@ -89,6 +108,7 @@ export default function WorkspaceKanbanDrawer({
     selectionAnchorId,
     updateSelectionForGesture,
     updateSelectionForArea,
+    clearSelection,
     selectForContextMenu
   } = useWorkspaceKanbanSelection(open, boardWorktrees)
   const { handleAreaSelectionPointerDown } = useWorkspaceKanbanAreaSelection({
@@ -103,41 +123,120 @@ export default function WorkspaceKanbanDrawer({
     useWorkspaceKanbanColumnResize(workspaceBoardColumnWidth, setWorkspaceBoardColumnWidth)
   const moveWorktreeToStatus = useCallback(
     (worktreeId: string, status: WorkspaceStatus) => {
-      const expanded = expandWorktreeIdsToGroupMembers([worktreeId], allWorktrees)
-      const updates = new Map<string, { workspaceStatus: WorkspaceStatus }>()
-      for (const id of expanded) {
-        const current = worktreeById.get(id)
-        if (!current || getWorkspaceStatus(current, workspaceStatuses) === status) {
-          continue
-        }
-        updates.set(id, { workspaceStatus: status })
-      }
-      if (updates.size === 1 && expanded.length === 1) {
-        void updateWorktreeMeta(worktreeId, { workspaceStatus: status })
+      const updates = buildWorkspaceGroupStatusUpdates({
+        worktreeIds: [worktreeId],
+        allWorktrees,
+        workspaceStatuses,
+        targetStatus: status
+      })
+      if (updates.size === 0) {
         return
       }
-      if (updates.size > 0) {
-        void updateWorktreesMeta(updates)
-      }
+      useAppStore.getState().recordFeatureInteraction('workspace-board-actions')
+      void updateWorktreesMeta(updates)
     },
-    [allWorktrees, updateWorktreeMeta, updateWorktreesMeta, workspaceStatuses, worktreeById]
+    [allWorktrees, updateWorktreesMeta, workspaceStatuses]
   )
-  const moveWorktreesToStatus = useCallback(
-    (worktreeIds: readonly string[], status: WorkspaceStatus) => {
-      const expanded = expandWorktreeIdsToGroupMembers(worktreeIds, allWorktrees)
-      const updates = new Map<string, { workspaceStatus: WorkspaceStatus }>()
-      for (const worktreeId of expanded) {
+  const getSourceStatusKeys = useCallback(
+    (worktreeIds: readonly string[]): WorkspaceStatus[] =>
+      worktreeIds.flatMap((worktreeId) => {
+        const worktree = worktreeById.get(worktreeId)
+        return worktree ? [getWorkspaceStatus(worktree, workspaceStatuses)] : []
+      }),
+    [workspaceStatuses, worktreeById]
+  )
+  const shouldWriteDropManualOrder = useCallback(
+    (worktreeIds: readonly string[], status: WorkspaceStatus): boolean =>
+      shouldWriteManualOrderForGroupDrop({
+        sortBy,
+        sourceGroupKeys: getSourceStatusKeys(worktreeIds),
+        targetGroupKey: status
+      }),
+    [getSourceStatusKeys, sortBy]
+  )
+  const dropWorktreesInStatus = useCallback(
+    (args: {
+      worktreeIds: readonly string[]
+      status: WorkspaceStatus
+      dropIndex: number
+      writeManualOrder?: boolean
+    }) => {
+      const draggedWorktreeIds = expandWorktreeIdsToGroupMembers(args.worktreeIds, allWorktrees)
+      const updates = new Map<string, Partial<WorktreeMeta>>()
+      const writeManualOrder =
+        args.writeManualOrder ?? shouldWriteDropManualOrder(draggedWorktreeIds, args.status)
+      const rankByWorktreeId = writeManualOrder
+        ? (() => {
+            const ranks = new Map<string, number>()
+            for (const group of boardDragGroups) {
+              for (const worktreeId of group.worktreeIds) {
+                const worktree = worktreeById.get(worktreeId)
+                if (worktree) {
+                  ranks.set(worktreeId, worktree.manualOrder ?? worktree.sortOrder)
+                }
+              }
+            }
+            return ranks
+          })()
+        : undefined
+      const order = writeManualOrder
+        ? buildManualOrderUpdatesForGroupDrop({
+            groups: boardDragGroups,
+            targetGroupKey: args.status,
+            draggedIds: draggedWorktreeIds,
+            dropIndex: args.dropIndex,
+            now: Date.now(),
+            rankByWorktreeId
+          })
+        : { changed: false, updates: new Map<string, { manualOrder: number }>() }
+
+      for (const worktreeId of draggedWorktreeIds) {
         const current = worktreeById.get(worktreeId)
-        if (!current || getWorkspaceStatus(current, workspaceStatuses) === status) {
+        if (!current) {
           continue
         }
-        updates.set(worktreeId, { workspaceStatus: status })
+        const next = updates.get(worktreeId) ?? {}
+        if (getWorkspaceStatus(current, workspaceStatuses) !== args.status) {
+          next.workspaceStatus = args.status
+        }
+        updates.set(worktreeId, next)
       }
-      if (updates.size > 0) {
-        void updateWorktreesMeta(updates)
+
+      if (writeManualOrder) {
+        for (const [worktreeId, manualOrder] of order.updates) {
+          const currentUpdate = updates.get(worktreeId)
+          updates.set(
+            worktreeId,
+            currentUpdate ? { ...currentUpdate, ...manualOrder } : manualOrder
+          )
+        }
       }
+
+      for (const [worktreeId, update] of Array.from(updates)) {
+        if (Object.keys(update).length === 0) {
+          updates.delete(worktreeId)
+        }
+      }
+      if (updates.size === 0) {
+        return
+      }
+      // Why: cross-lane drops in a derived sort are usually just status moves.
+      // Only explicit rank gestures should fork the board/sidebar into Manual.
+      if (writeManualOrder && order.changed) {
+        setSortBy('manual')
+      }
+      useAppStore.getState().recordFeatureInteraction('workspace-board-actions')
+      void updateWorktreesMeta(updates)
     },
-    [allWorktrees, updateWorktreesMeta, workspaceStatuses, worktreeById]
+    [
+      boardDragGroups,
+      allWorktrees,
+      setSortBy,
+      shouldWriteDropManualOrder,
+      updateWorktreesMeta,
+      workspaceStatuses,
+      worktreeById
+    ]
   )
   const pinWorktree = useCallback(
     (worktreeId: string) => {
@@ -161,6 +260,7 @@ export default function WorkspaceKanbanDrawer({
         updates.set(worktreeId, { isPinned: true })
       }
       if (updates.size > 0) {
+        useAppStore.getState().recordFeatureInteraction('workspace-board-actions')
         void updateWorktreesMeta(updates)
       }
     },
@@ -171,9 +271,10 @@ export default function WorkspaceKanbanDrawer({
     boardRef,
     selectedWorktreeIds,
     selectedWorktrees,
-    onMoveWorktreesToStatus: moveWorktreesToStatus,
+    onDropWorktreesInStatus: dropWorktreesInStatus,
     onPinWorktrees: pinWorktrees,
     onDragTargetChange: setDragOverStatus,
+    onShouldShowDropIndicator: shouldWriteDropManualOrder,
     onPinDragTargetChange: setPinDragOver
   })
   const handleDragOver = useCallback((event: React.DragEvent, status: WorkspaceStatus) => {
@@ -215,6 +316,18 @@ export default function WorkspaceKanbanDrawer({
     setPinDragOver(false)
   }, [])
 
+  const dropWorktreesAtEndOfStatus = useCallback(
+    (worktreeIds: readonly string[], status: WorkspaceStatus) => {
+      dropWorktreesInStatus({
+        worktreeIds,
+        status,
+        dropIndex: worktreesByStatus.get(status)?.length ?? 0,
+        writeManualOrder: sortBy === 'manual'
+      })
+    },
+    [dropWorktreesInStatus, sortBy, worktreesByStatus]
+  )
+
   const handleDrop = useCallback(
     (event: React.DragEvent, status: WorkspaceStatus) => {
       const worktreeIds = readWorkspaceDragDataIds(event.dataTransfer)
@@ -223,21 +336,14 @@ export default function WorkspaceKanbanDrawer({
       }
       event.preventDefault()
       setDragOverStatus(null)
-      moveWorktreesToStatus(worktreeIds, status)
+      dropWorktreesAtEndOfStatus(worktreeIds, status)
     },
-    [moveWorktreesToStatus]
+    [dropWorktreesAtEndOfStatus]
   )
 
   const handleWorktreeActivate = useCallback(() => {
     onOpenChange(false)
   }, [onOpenChange])
-
-  const handleOpacityChange = useCallback(
-    (event: React.ChangeEvent<HTMLInputElement>) => {
-      setWorkspaceBoardOpacity(Number(event.target.value) / 100)
-    },
-    [setWorkspaceBoardOpacity]
-  )
 
   const handleRenameStatus = useCallback(
     (statusId: string, label: string) => {
@@ -250,6 +356,7 @@ export default function WorkspaceKanbanDrawer({
           status.id === statusId ? { ...status, label: trimmed } : status
         )
       )
+      useAppStore.getState().recordFeatureInteraction('workspace-board-actions')
     },
     [setWorkspaceStatuses, workspaceStatuses]
   )
@@ -259,6 +366,7 @@ export default function WorkspaceKanbanDrawer({
       setWorkspaceStatuses(
         workspaceStatuses.map((status) => (status.id === statusId ? { ...status, color } : status))
       )
+      useAppStore.getState().recordFeatureInteraction('workspace-board-actions')
     },
     [setWorkspaceStatuses, workspaceStatuses]
   )
@@ -268,6 +376,7 @@ export default function WorkspaceKanbanDrawer({
       setWorkspaceStatuses(
         workspaceStatuses.map((status) => (status.id === statusId ? { ...status, icon } : status))
       )
+      useAppStore.getState().recordFeatureInteraction('workspace-board-actions')
     },
     [setWorkspaceStatuses, workspaceStatuses]
   )
@@ -283,6 +392,7 @@ export default function WorkspaceKanbanDrawer({
       const [moved] = next.splice(index, 1)
       next.splice(nextIndex, 0, moved)
       setWorkspaceStatuses(next)
+      useAppStore.getState().recordFeatureInteraction('workspace-board-actions')
     },
     [setWorkspaceStatuses, workspaceStatuses]
   )
@@ -293,6 +403,7 @@ export default function WorkspaceKanbanDrawer({
       ...workspaceStatuses,
       { id: makeWorkspaceStatusId(label, workspaceStatuses), label }
     ])
+    useAppStore.getState().recordFeatureInteraction('workspace-board-actions')
   }, [setWorkspaceStatuses, workspaceStatuses])
 
   const handleRemoveStatus = useCallback(
@@ -307,6 +418,7 @@ export default function WorkspaceKanbanDrawer({
       const next = workspaceStatuses.filter((status) => status.id !== statusId)
       const fallbackStatus = next[Math.min(index, next.length - 1)]?.id ?? next[0]!.id
       setWorkspaceStatuses(next)
+      useAppStore.getState().recordFeatureInteraction('workspace-board-actions')
       for (const worktree of allWorktrees) {
         if (getWorkspaceStatus(worktree, workspaceStatuses) === statusId) {
           void updateWorktreeMeta(worktree.id, { workspaceStatus: fallbackStatus })
@@ -323,7 +435,7 @@ export default function WorkspaceKanbanDrawer({
     handleDragFinish,
     open,
     {
-      onMoveWorktreesToStatus: moveWorktreesToStatus,
+      onMoveWorktreesToStatus: dropWorktreesAtEndOfStatus,
       onPinWorktrees: pinWorktrees
     }
   )
@@ -331,7 +443,35 @@ export default function WorkspaceKanbanDrawer({
   useWorkspaceKanbanShiftWheelScroll(boardRef, laneScrollerRef, open, isPointerDragActiveRef)
   useWorkspaceKanbanOutsideDismiss({ open, boardRef, preserveOpenForMenu, onOpenChange })
 
-  const opacityPercent = Math.round(workspaceBoardOpacity * 100)
+  useEffect(() => {
+    if (open) {
+      useAppStore.getState().recordFeatureInteraction('workspace-board')
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (!open || selectedWorktreeIds.size === 0) {
+      return
+    }
+
+    const clearSelectionOutsideBoard = (event: PointerEvent): void => {
+      const content = boardRef.current?.closest<HTMLElement>('[data-slot="sheet-content"]')
+      const target = event.target
+      if (target instanceof Node && content?.contains(target)) {
+        return
+      }
+      if (isWorkspaceBoardKeepOpenTarget(target)) {
+        return
+      }
+      clearSelection()
+    }
+
+    // Why: clicks in the sidebar are outside the companion board but do not
+    // close it; they still need to behave like "click off" for board selection.
+    document.addEventListener('pointerdown', clearSelectionOutsideBoard, true)
+    return () => document.removeEventListener('pointerdown', clearSelectionOutsideBoard, true)
+  }, [clearSelection, open, selectedWorktreeIds.size])
+
   const drawerLeft = sidebarOpen ? sidebarWidth : 0
   const drawerLeftCss = sidebarOpen
     ? `var(--workspace-sidebar-live-width, ${sidebarWidth}px)`
@@ -351,8 +491,7 @@ export default function WorkspaceKanbanDrawer({
             left: drawerLeftCss,
             top: 36,
             height: 'calc(100% - 36px)',
-            width: `min(calc(100vw - ${drawerLeftCss}), 1294px)`,
-            opacity: workspaceBoardOpacity
+            width: `min(calc(100vw - ${drawerLeftCss}), 1294px)`
           } as React.CSSProperties
         }
         data-workspace-board-compact={workspaceBoardCompact ? 'true' : 'false'}
@@ -387,10 +526,11 @@ export default function WorkspaceKanbanDrawer({
         <WorkspaceKanbanDrawerHeader
           selectedCount={selectedWorktrees.length}
           compact={workspaceBoardCompact}
-          opacityPercent={opacityPercent}
           workspaceStatuses={workspaceStatuses}
-          onCompactChange={setWorkspaceBoardCompact}
-          onOpacityChange={handleOpacityChange}
+          onCompactChange={(compact) => {
+            useAppStore.getState().recordFeatureInteraction('workspace-board-actions')
+            setWorkspaceBoardCompact(compact)
+          }}
           onRenameStatus={handleRenameStatus}
           onChangeStatusColor={handleChangeStatusColor}
           onChangeStatusIcon={handleChangeStatusIcon}
@@ -419,6 +559,7 @@ export default function WorkspaceKanbanDrawer({
             <WorkspaceKanbanLaneGrid
               statuses={workspaceStatuses}
               worktreesByStatus={worktreesByStatus}
+              workspaceGroupColors={workspaceGroupColors}
               repoMap={repoMap}
               activeWorktreeId={activeWorktreeId}
               compact={workspaceBoardCompact}
